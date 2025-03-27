@@ -55,6 +55,21 @@
         .nav-btn.active { color: var(--primary); font-weight: 600; }
         @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
         @media (max-width: 500px) { .btn { min-width: 100%; } .action-buttons { flex-direction: column; } .balances { flex-direction: column; text-align: center; } .nav-btn { font-size: 14px; padding: 10px; } }
+        /* Explicit z-index for modals */
+        #billsHistoryModal { z-index: 1000; }
+        #billForm { z-index: 1100; }
+        .bill-item .delete {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-left: 5px;
+        }
+        .bill-item .delete:hover {
+            background: #cc0000;
+        }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
@@ -103,7 +118,7 @@
         </div>
     </div>
 
-    <!-- Modals (removed duplicate billForm) -->
+    <!-- Modals -->
     <div id="expenseForm" class="modal">
         <div class="modal-content">
             <div class="modal-header">

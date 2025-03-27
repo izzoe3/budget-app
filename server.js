@@ -79,7 +79,6 @@ db.serialize(() => {
         date TEXT
     )`, err => err && console.error('Error creating bills table:', err));
 
-    // Ensure "Bills" category exists (run once)
     db.get('SELECT id FROM categories WHERE name = "Bills"', [], (err, row) => {
         if (!row && !err) {
             db.run('INSERT INTO categories (name, budget) VALUES ("Bills", 0)', err => 
@@ -95,15 +94,7 @@ const addMonths = (dateStr, months) => {
     return date.toISOString().split('T')[0];
 };
 
-// Helper to check if today is 5 days before due_date
-const isFiveDaysBefore = (dueDateStr) => {
-    const dueDate = new Date(dueDateStr);
-    const fiveDaysBefore = new Date(dueDate);
-    fiveDaysBefore.setDate(dueDate.getDate() - 5);
-    return new Date() >= fiveDaysBefore && new Date() < dueDate;
-};
-
-// Money Endpoints (unchanged)
+// Money Endpoints
 app.get('/api/money', (req, res) => {
     db.all('SELECT * FROM money', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -132,7 +123,7 @@ app.put('/api/money/:id', (req, res) => {
         });
 });
 
-// Category Endpoints (unchanged)
+// Category Endpoints
 app.get('/api/categories', (req, res) => {
     db.all('SELECT * FROM categories', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -168,7 +159,7 @@ app.delete('/api/categories/:id', (req, res) => {
     });
 });
 
-// Expenses Endpoints (unchanged)
+// Expenses Endpoints
 app.get('/api/expenses', (req, res) => {
     db.all('SELECT e.*, c.name as category_name FROM expenses e LEFT JOIN categories c ON e.category_id = c.id',
         [], (err, rows) => {
@@ -205,7 +196,7 @@ app.delete('/api/expenses/:id', (req, res) => {
     });
 });
 
-// Goals Endpoints (unchanged)
+// Goals Endpoints
 app.get('/api/goals', (req, res) => {
     db.all('SELECT * FROM goals', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -234,17 +225,7 @@ app.delete('/api/goals/:id', (req, res) => {
 app.get('/api/bills', (req, res) => {
     db.all('SELECT * FROM bills', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
-        // Revert paid status if 5 days before due_date
-        rows.forEach(bill => {
-            if (bill.paid && isFiveDaysBefore(bill.due_date)) {
-                db.run('UPDATE bills SET paid = 0 WHERE id = ?', [bill.id], err => 
-                    err && console.error('Error reverting bill status:', err));
-            }
-        });
-        db.all('SELECT * FROM bills', [], (err, updatedRows) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json(updatedRows);
-        });
+        res.json(rows);
     });
 });
 
@@ -260,28 +241,64 @@ app.post('/api/bills', (req, res) => {
 
 app.put('/api/bills/:id', (req, res) => {
     const { name, amount, is_fixed, due_date, paid } = req.body;
-    db.run('UPDATE bills SET name = ?, amount = ?, is_fixed = ?, due_date = ?, paid = ? WHERE id = ?',
-        [name, amount, is_fixed, due_date, paid ?? 0, req.params.id],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            if (this.changes === 0) return res.status(404).json({ error: 'Bill not found' });
-            if (paid && is_fixed) { // Recur fixed bills when marked paid
-                db.run('INSERT INTO bills (name, amount, is_fixed, due_date, date) VALUES (?, ?, ?, ?, ?)',
-                    [name, amount, is_fixed, addMonths(due_date, 1), new Date().toISOString()],
-                    err => err && console.error('Error recurring bill:', err));
+    db.serialize(() => {
+        db.run('BEGIN TRANSACTION');
+        db.get('SELECT paid FROM bills WHERE id = ?', [req.params.id], (err, row) => {
+            if (err) {
+                db.run('ROLLBACK');
+                return res.status(500).json({ error: err.message });
             }
-            res.json({ success: true });
+            if (!row) {
+                db.run('ROLLBACK');
+                return res.status(404).json({ error: 'Bill not found' });
+            }
+
+            const wasPaid = row.paid;
+            db.run('UPDATE bills SET name = ?, amount = ?, is_fixed = ?, due_date = ?, paid = ? WHERE id = ?',
+                [name, amount, is_fixed, due_date, paid ?? 0, req.params.id],
+                function(err) {
+                    if (err) {
+                        db.run('ROLLBACK');
+                        return res.status(500).json({ error: err.message });
+                    }
+                    if (this.changes === 0) {
+                        db.run('ROLLBACK');
+                        return res.status(404).json({ error: 'Bill not found' });
+                    }
+
+                    if (!wasPaid && paid && is_fixed) {
+                        db.run('INSERT INTO bills (name, amount, is_fixed, due_date, date, paid) VALUES (?, ?, ?, ?, ?, 0)',
+                            [name, amount, is_fixed, addMonths(due_date, 1), new Date().toISOString()],
+                            function(err) {
+                                if (err) {
+                                    db.run('ROLLBACK');
+                                    return res.status(500).json({ error: 'Error recurring bill: ' + err.message });
+                                }
+                                db.run('COMMIT', err => {
+                                    if (err) return res.status(500).json({ error: 'Transaction commit failed' });
+                                    res.json({ success: true });
+                                });
+                            });
+                    } else {
+                        db.run('COMMIT', err => {
+                            if (err) return res.status(500).json({ error: 'Transaction commit failed' });
+                            res.json({ success: true });
+                        });
+                    }
+                });
         });
+    });
 });
 
 app.delete('/api/bills/:id', (req, res) => {
     db.run('DELETE FROM bills WHERE id = ?', [req.params.id], function(err) {
         if (err) return res.status(500).json({ error: err.message });
+        if (this.changes === 0) return res.status(404).json({ error: 'Bill not found' });
         res.json({ success: true });
     });
 });
 
-// Reset Endpoint (unchanged)
+// Reset Endpoint
 app.post('/api/reset', (req, res) => {
     db.serialize(() => {
         db.run(

@@ -133,7 +133,8 @@ function updateDisplay() {
     billList.innerHTML = bills.filter(b => !b.paid).map(bill => `
         <div class="bill-item">
             <span>${bill.name}: RM ${bill.amount.toFixed(2)} (Due: ${bill.due_date})</span>
-            <button class="paid" onclick="markBillPaid(${bill.id})">Paid</button>
+            <button class="paid" id="paid-btn-${bill.id}" onclick="markBillPaid(${bill.id}, this)">Paid</button>
+            <button class="delete" id="delete-btn-${bill.id}" onclick="deleteBill(${bill.id}, this)">Delete</button>
         </div>
     `).join('') || '<div class="bill-item">No unpaid bills</div>';
 
@@ -314,7 +315,7 @@ async function saveBill() {
     const due_date = document.getElementById('billDueDate').value;
     const is_fixed = parseInt(document.getElementById('billType').value);
     if (!name || (is_fixed && !amount) || !due_date) return showError('Please fill all fields (amount optional for dynamic bills)');
-    
+
     const bill = editingBillId ? bills.find(b => b.id === editingBillId) : null;
     const billData = { name, amount: amount || 0, due_date, is_fixed, paid: bill ? bill.paid : 0 };
 
@@ -343,26 +344,53 @@ function editBill(id) {
     document.getElementById('billType').value = bill.is_fixed ? '1' : '0';
     document.getElementById('billFormTitle').textContent = 'Edit Bill';
     document.getElementById('billFormButton').textContent = 'Save Changes';
+    hideModal('billsHistoryModal');
     showModal('billForm');
 }
 
-async function markBillPaid(id) {
+async function markBillPaid(id, button) {
     const bill = bills.find(b => b.id === id);
-    if (!bill) return;
+    if (!bill) return showError('Bill not found');
+    if (bill.paid) return showError('Bill is already paid');
+
+    button.disabled = true;
+    button.textContent = 'Processing...';
+
     const totals = calculateTotals();
     const source = totals.cash >= bill.amount ? 'Cash' : 'Bank';
-    if (source === 'Cash' && bill.amount > totals.cash) return showError('Not enough cash to pay this bill!');
-    if (source === 'Bank' && bill.amount > totals.bank) return showError('Not enough money in bank to pay this bill!');
+    if (source === 'Cash' && bill.amount > totals.cash) {
+        button.disabled = false;
+        button.textContent = 'Paid';
+        return showError('Not enough cash to pay this bill!');
+    }
+    if (source === 'Bank' && bill.amount > totals.bank) {
+        button.disabled = false;
+        button.textContent = 'Paid';
+        return showError('Not enough money in bank to pay this bill!');
+    }
 
     try {
-        await fetch(`/api/bills/${id}`, {
+        const response = await fetch(`/api/bills/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...bill, paid: 1 })
+            body: JSON.stringify({
+                name: bill.name,
+                amount: bill.amount,
+                is_fixed: bill.is_fixed,
+                due_date: bill.due_date,
+                paid: 1
+            })
         });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to mark bill as paid: ${errorText}`);
+        }
+        const result = await response.json();
+        if (!result.success) throw new Error('Server did not confirm success');
+
         const billsCategory = categories.find(cat => cat.name === 'Bills');
         if (billsCategory) {
-            await fetch('/api/expenses', {
+            const expenseResponse = await fetch('/api/expenses', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -372,11 +400,55 @@ async function markBillPaid(id) {
                     category_id: billsCategory.id
                 })
             });
+            if (!expenseResponse.ok) throw new Error('Failed to record expense');
         }
         await loadData();
     } catch (error) {
-        console.error('Error marking bill as paid:', error);
-        showError('Failed to mark bill as paid');
+        console.error('Error marking bill as paid:', error.message);
+        showError(`Failed to mark bill as paid: ${error.message}`);
+        button.disabled = false;
+        button.textContent = 'Paid';
+    }
+}
+
+async function deleteBill(id, button) {
+    if (!confirm('Are you sure you want to delete this bill? This will also remove any associated expense if paid.')) return;
+
+    button.disabled = true;
+    button.textContent = 'Deleting...';
+
+    const bill = bills.find(b => b.id === id);
+    if (!bill) {
+        button.disabled = false;
+        button.textContent = 'Delete';
+        return showError('Bill not found');
+    }
+
+    try {
+        // Delete the bill
+        const billResponse = await fetch(`/api/bills/${id}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        if (!billResponse.ok) throw new Error('Failed to delete bill');
+
+        // If the bill was paid, delete the associated expense
+        if (bill.paid) {
+            const expense = expenses.find(e => e.description === `Paid: ${bill.name}`);
+            if (expense) {
+                const expenseResponse = await fetch(`/api/expenses/${expense.id}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                if (!expenseResponse.ok) throw new Error('Failed to delete associated expense');
+            }
+        }
+        await loadData();
+    } catch (error) {
+        console.error('Error deleting bill:', error.message);
+        showError(`Failed to delete bill: ${error.message}`);
+        button.disabled = false;
+        button.textContent = 'Delete';
     }
 }
 
@@ -480,4 +552,4 @@ document.querySelectorAll('.modal').forEach(modal => {
 });
 
 loadData();
-setInterval(loadData, 60000); // Refresh every minute to catch bill status changes
+setInterval(loadData, 60000); // Refresh every minute
