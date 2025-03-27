@@ -1,6 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-const sqlite3 = require('sqlite3');
+const { Pool } = require('pg');
 const cors = require('cors');
 const basicAuth = require('basic-auth');
 const app = express();
@@ -10,334 +10,362 @@ app.use(express.json());
 app.use(express.static('public'));
 
 const auth = (req, res, next) => {
-    const user = basicAuth(req);
-    const username = process.env.AUTH_USERNAME || 'defaultuser';
-    const password = process.env.AUTH_PASSWORD || 'defaultpass';
-    if (!user || user.name !== username || user.pass !== password) {
-        res.set('WWW-Authenticate', 'Basic realm="Private Budget App"');
-        return res.status(401).send('Unauthorized');
-    }
-    next();
+  const user = basicAuth(req);
+  const username = process.env.AUTH_USERNAME || 'defaultuser';
+  const password = process.env.AUTH_PASSWORD || 'defaultpass';
+  if (!user || user.name !== username || user.pass !== password) {
+    res.set('WWW-Authenticate', 'Basic realm="Private Budget App"');
+    return res.status(401).send('Unauthorized');
+  }
+  next();
 };
 
 app.use(auth);
 
-const db = new sqlite3.Database('budget.db', (err) => {
-    if (err) console.error('Database connection error:', err);
-    else console.log('Connected to database');
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:your_local_password@localhost:5432/budget_app',
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
 // Initialize database tables
-db.serialize(() => {
-    db.run(`CREATE TABLE IF NOT EXISTS money (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+(async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS money (
+        id SERIAL PRIMARY KEY,
         amount REAL,
         location TEXT CHECK(location IN ('Cash', 'Bank', 'MyTabung')),
         date TEXT
-    )`, err => err && console.error('Error creating money table:', err));
-
-    db.run(`CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE,
-        budget REAL
-    )`, err => err && console.error('Error creating categories table:', err));
-
-    db.run(`CREATE TABLE IF NOT EXISTS expenses (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+      );
+      CREATE TABLE IF NOT EXISTS categories (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        budget REAL,
+        CONSTRAINT unique_name UNIQUE (name)
+      );
+      CREATE TABLE IF NOT EXISTS expenses (
+        id SERIAL PRIMARY KEY,
         amount REAL,
         description TEXT,
         source TEXT CHECK(source IN ('Cash', 'Bank')),
-        category_id INTEGER,
-        date TEXT,
-        FOREIGN KEY (category_id) REFERENCES categories(id)
-    )`, err => err && console.error('Error creating expenses table:', err));
-
-    db.run(`CREATE TABLE IF NOT EXISTS goals (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_id INTEGER REFERENCES categories(id),
+        date TEXT
+      );
+      CREATE TABLE IF NOT EXISTS goals (
+        id SERIAL PRIMARY KEY,
         name TEXT,
         target_amount REAL,
         deadline TEXT
-    )`, err => err && console.error('Error creating goals table:', err));
-
-    db.run(`CREATE TABLE IF NOT EXISTS expenses_archive (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+      );
+      CREATE TABLE IF NOT EXISTS expenses_archive (
+        id SERIAL PRIMARY KEY,
         amount REAL,
         description TEXT,
         source TEXT,
         category_id INTEGER,
         date TEXT,
         archive_date TEXT
-    )`, err => err && console.error('Error creating expenses_archive table:', err));
-
-    db.run(`CREATE TABLE IF NOT EXISTS bills (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+      );
+      CREATE TABLE IF NOT EXISTS bills (
+        id SERIAL PRIMARY KEY,
         name TEXT,
         amount REAL,
         is_fixed INTEGER,
         paid INTEGER DEFAULT 0,
         due_date TEXT,
         date TEXT
-    )`, err => err && console.error('Error creating bills table:', err));
+      );
+    `);
 
-    db.get('SELECT id FROM categories WHERE name = "Bills"', [], (err, row) => {
-        if (!row && !err) {
-            db.run('INSERT INTO categories (name, budget) VALUES ("Bills", 0)', err => 
-                err && console.error('Error creating Bills category:', err));
-        }
-    });
-});
+    const { rows } = await pool.query('SELECT id FROM categories WHERE name = $1', ['Bills']);
+    if (rows.length === 0) {
+      await pool.query('INSERT INTO categories (name, budget) VALUES ($1, $2)', ['Bills', 0]);
+    }
+    console.log('Connected to database');
+  } catch (err) {
+    console.error('Database connection or initialization error:', err);
+  }
+})();
 
 // Helper to add months to a date
 const addMonths = (dateStr, months) => {
-    const date = new Date(dateStr);
-    date.setMonth(date.getMonth() + months);
-    return date.toISOString().split('T')[0];
+  const date = new Date(dateStr);
+  date.setMonth(date.getMonth() + months);
+  return date.toISOString().split('T')[0];
 };
 
 // Money Endpoints
-app.get('/api/money', (req, res) => {
-    db.all('SELECT * FROM money', [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
-    });
+app.get('/api/money', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM money');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/money', (req, res) => {
-    const { amount, location } = req.body;
-    db.run('INSERT INTO money (amount, location, date) VALUES (?, ?, ?)',
-        [amount, location, new Date().toISOString()],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ id: this.lastID });
-        });
+app.post('/api/money', async (req, res) => {
+  const { amount, location } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO money (amount, location, date) VALUES ($1, $2, $3) RETURNING id',
+      [amount, location, new Date().toISOString()]
+    );
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.put('/api/money/:id', (req, res) => {
-    const { amount, location } = req.body;
-    db.run('UPDATE money SET amount = ?, location = ? WHERE id = ?',
-        [amount, location, req.params.id],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            if (this.changes === 0) return res.status(404).json({ error: 'Money entry not found' });
-            res.json({ success: true });
-        });
+app.put('/api/money/:id', async (req, res) => {
+  const { amount, location } = req.body;
+  try {
+    const { rowCount } = await pool.query(
+      'UPDATE money SET amount = $1, location = $2 WHERE id = $3',
+      [amount, location, req.params.id]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Money entry not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Category Endpoints
-app.get('/api/categories', (req, res) => {
-    db.all('SELECT * FROM categories', [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
-    });
+app.get('/api/categories', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM categories');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/categories', (req, res) => {
-    const { name, budget } = req.body;
-    db.run('INSERT INTO categories (name, budget) VALUES (?, ?)',
-        [name, budget],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ id: this.lastID });
-        });
+app.post('/api/categories', async (req, res) => {
+  const { name, budget } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO categories (name, budget) VALUES ($1, $2) RETURNING id',
+      [name, budget]
+    );
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.put('/api/categories/:id', (req, res) => {
-    const { name, budget } = req.body;
-    db.run('UPDATE categories SET name = ?, budget = ? WHERE id = ?',
-        [name, budget, req.params.id],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            if (this.changes === 0) return res.status(404).json({ error: 'Category not found' });
-            res.json({ success: true });
-        });
+app.put('/api/categories/:id', async (req, res) => {
+  const { name, budget } = req.body;
+  try {
+    const { rowCount } = await pool.query(
+      'UPDATE categories SET name = $1, budget = $2 WHERE id = $3',
+      [name, budget, req.params.id]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Category not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/categories/:id', (req, res) => {
-    db.run('DELETE FROM categories WHERE id = ?', [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
+app.delete('/api/categories/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM categories WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Category not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Expenses Endpoints
-app.get('/api/expenses', (req, res) => {
-    db.all('SELECT e.*, c.name as category_name FROM expenses e LEFT JOIN categories c ON e.category_id = c.id',
-        [], (err, rows) => {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json(rows);
-        });
+app.get('/api/expenses', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT e.*, c.name as category_name FROM expenses e LEFT JOIN categories c ON e.category_id = c.id'
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/expenses', (req, res) => {
-    const { amount, description, source, category_id } = req.body;
-    db.run('INSERT INTO expenses (amount, description, source, category_id, date) VALUES (?, ?, ?, ?, ?)',
-        [amount, description, source, category_id || null, new Date().toISOString()],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ id: this.lastID });
-        });
+app.post('/api/expenses', async (req, res) => {
+  const { amount, description, source, category_id } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO expenses (amount, description, source, category_id, date) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [amount, description, source, category_id || null, new Date().toISOString()]
+    );
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.put('/api/expenses/:id', (req, res) => {
-    const { amount, description, source, category_id } = req.body;
-    db.run('UPDATE expenses SET amount = ?, description = ?, source = ?, category_id = ? WHERE id = ?',
-        [amount, description, source, category_id || null, req.params.id],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            if (this.changes === 0) return res.status(404).json({ error: 'Expense not found' });
-            res.json({ success: true });
-        });
+app.put('/api/expenses/:id', async (req, res) => {
+  const { amount, description, source, category_id } = req.body;
+  try {
+    const { rowCount } = await pool.query(
+      'UPDATE expenses SET amount = $1, description = $2, source = $3, category_id = $4 WHERE id = $5',
+      [amount, description, source, category_id || null, req.params.id]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: 'Expense not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/expenses/:id', (req, res) => {
-    db.run('DELETE FROM expenses WHERE id = ?', [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
+app.delete('/api/expenses/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM expenses WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Expense not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Goals Endpoints
-app.get('/api/goals', (req, res) => {
-    db.all('SELECT * FROM goals', [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
-    });
+app.get('/api/goals', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM goals');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/goals', (req, res) => {
-    const { name, target_amount, deadline } = req.body;
-    db.run('INSERT INTO goals (name, target_amount, deadline) VALUES (?, ?, ?)',
-        [name, target_amount, deadline],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ id: this.lastID });
-        });
+app.post('/api/goals', async (req, res) => {
+  const { name, target_amount, deadline } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO goals (name, target_amount, deadline) VALUES ($1, $2, $3) RETURNING id',
+      [name, target_amount, deadline]
+    );
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.delete('/api/goals/:id', (req, res) => {
-    db.run('DELETE FROM goals WHERE id = ?', [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
-    });
+app.delete('/api/goals/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM goals WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Goal not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Bills Endpoints
-app.get('/api/bills', (req, res) => {
-    db.all('SELECT * FROM bills', [], (err, rows) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
-    });
+app.get('/api/bills', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM bills');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/bills', (req, res) => {
-    const { name, amount, is_fixed, due_date } = req.body;
-    db.run('INSERT INTO bills (name, amount, is_fixed, due_date, date) VALUES (?, ?, ?, ?, ?)',
-        [name, amount, is_fixed, due_date, new Date().toISOString()],
-        function(err) {
-            if (err) return res.status(500).json({ error: err.message });
-            res.json({ id: this.lastID });
-        });
+app.post('/api/bills', async (req, res) => {
+  const { name, amount, is_fixed, due_date } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO bills (name, amount, is_fixed, due_date, date) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [name, amount, is_fixed, due_date, new Date().toISOString()]
+    );
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.put('/api/bills/:id', (req, res) => {
-    const { name, amount, is_fixed, due_date, paid } = req.body;
-    db.serialize(() => {
-        db.run('BEGIN TRANSACTION');
-        db.get('SELECT paid FROM bills WHERE id = ?', [req.params.id], (err, row) => {
-            if (err) {
-                db.run('ROLLBACK');
-                return res.status(500).json({ error: err.message });
-            }
-            if (!row) {
-                db.run('ROLLBACK');
-                return res.status(404).json({ error: 'Bill not found' });
-            }
+app.put('/api/bills/:id', async (req, res) => {
+  const { name, amount, is_fixed, due_date, paid } = req.body;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query('SELECT paid FROM bills WHERE id = $1', [req.params.id]);
+    if (rows.length === 0) throw new Error('Bill not found');
+    const wasPaid = rows[0].paid;
 
-            const wasPaid = row.paid;
-            db.run('UPDATE bills SET name = ?, amount = ?, is_fixed = ?, due_date = ?, paid = ? WHERE id = ?',
-                [name, amount, is_fixed, due_date, paid ?? 0, req.params.id],
-                function(err) {
-                    if (err) {
-                        db.run('ROLLBACK');
-                        return res.status(500).json({ error: err.message });
-                    }
-                    if (this.changes === 0) {
-                        db.run('ROLLBACK');
-                        return res.status(404).json({ error: 'Bill not found' });
-                    }
+    await client.query(
+      'UPDATE bills SET name = $1, amount = $2, is_fixed = $3, due_date = $4, paid = $5 WHERE id = $6',
+      [name, amount, is_fixed, due_date, paid ?? 0, req.params.id]
+    );
 
-                    if (!wasPaid && paid && is_fixed) {
-                        db.run('INSERT INTO bills (name, amount, is_fixed, due_date, date, paid) VALUES (?, ?, ?, ?, ?, 0)',
-                            [name, amount, is_fixed, addMonths(due_date, 1), new Date().toISOString()],
-                            function(err) {
-                                if (err) {
-                                    db.run('ROLLBACK');
-                                    return res.status(500).json({ error: 'Error recurring bill: ' + err.message });
-                                }
-                                db.run('COMMIT', err => {
-                                    if (err) return res.status(500).json({ error: 'Transaction commit failed' });
-                                    res.json({ success: true });
-                                });
-                            });
-                    } else {
-                        db.run('COMMIT', err => {
-                            if (err) return res.status(500).json({ error: 'Transaction commit failed' });
-                            res.json({ success: true });
-                        });
-                    }
-                });
-        });
-    });
+    if (!wasPaid && paid && is_fixed) {
+      await client.query(
+        'INSERT INTO bills (name, amount, is_fixed, due_date, date, paid) VALUES ($1, $2, $3, $4, $5, 0)',
+        [name, amount, is_fixed, addMonths(due_date, 1), new Date().toISOString()]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(err.message === 'Bill not found' ? 404 : 500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
-app.delete('/api/bills/:id', (req, res) => {
-    db.run('DELETE FROM bills WHERE id = ?', [req.params.id], function(err) {
-        if (err) return res.status(500).json({ error: err.message });
-        if (this.changes === 0) return res.status(404).json({ error: 'Bill not found' });
-        res.json({ success: true });
-    });
+app.delete('/api/bills/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM bills WHERE id = $1', [req.params.id]);
+    if (rowCount === 0) return res.status(404).json({ error: 'Bill not found' });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Reset Endpoint
-app.post('/api/reset', (req, res) => {
-    db.serialize(() => {
-        db.run(
-            `INSERT INTO expenses_archive (amount, description, source, category_id, date, archive_date)
-             SELECT amount, description, source, category_id, date, ? FROM expenses`,
-            [new Date().toISOString()],
-            err => err && console.error('Error archiving expenses:', err)
+app.post('/api/reset', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    await client.query(
+      `INSERT INTO expenses_archive (amount, description, source, category_id, date, archive_date)
+       SELECT amount, description, source, category_id, date, $1 FROM expenses`,
+      [new Date().toISOString()]
+    );
+
+    const { rows: categories } = await client.query('SELECT * FROM categories');
+    const { rows: expenses } = await client.query('SELECT * FROM expenses');
+
+    for (const cat of categories) {
+      if (cat.name !== 'Bills') {
+        const spent = expenses.filter(e => e.category_id === cat.id).reduce((sum, e) => sum + (e.amount || 0), 0);
+        const carryover = cat.budget - spent;
+        await client.query(
+          'UPDATE categories SET budget = $1 WHERE id = $2',
+          [Math.max(0, cat.budget + carryover), cat.id]
         );
+      }
+    }
 
-        db.all('SELECT * FROM categories', [], (err, categories) => {
-            if (err) return res.status(500).json({ error: err.message });
-            db.all('SELECT * FROM expenses', [], (err, expenses) => {
-                if (err) return res.status(500).json({ error: err.message });
+    await client.query('UPDATE bills SET paid = 0');
 
-                categories.forEach(cat => {
-                    if (cat.name !== 'Bills') {
-                        const spent = expenses.filter(e => e.category_id === cat.id).reduce((sum, e) => sum + e.amount, 0);
-                        const carryover = cat.budget - spent;
-                        db.run('UPDATE categories SET budget = ? WHERE id = ?', [Math.max(0, cat.budget + carryover), cat.id],
-                            err => err && console.error('Error updating budget for category', cat.name, ':', err));
-                    }
-                });
+    const { rows: bills } = await client.query('SELECT * FROM bills');
+    const totalBillsBudget = bills.reduce((sum, bill) => sum + (bill.amount || 0), 0);
+    await client.query('UPDATE categories SET budget = $1 WHERE name = $2', [totalBillsBudget, 'Bills']);
 
-                db.run('UPDATE bills SET paid = 0', err => err && console.error('Error resetting bills:', err));
+    await client.query('DELETE FROM expenses');
 
-                db.all('SELECT * FROM bills', [], (err, bills) => {
-                    if (err) return res.status(500).json({ error: err.message });
-                    const totalBillsBudget = bills.reduce((sum, bill) => sum + (bill.amount || 0), 0);
-                    db.run('UPDATE categories SET budget = ? WHERE name = "Bills"', [totalBillsBudget],
-                        err => err && console.error('Error updating Bills budget:', err));
-
-                    db.run('DELETE FROM expenses', err => {
-                        if (err) return res.status(500).json({ error: err.message });
-                        res.json({ success: true });
-                    });
-                });
-            });
-        });
-    });
+    await client.query('COMMIT');
+    res.json({ success: true });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
 });
 
 const port = process.env.PORT || 3001;
