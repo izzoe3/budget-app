@@ -5,12 +5,10 @@ const cors = require('cors');
 const basicAuth = require('basic-auth');
 const app = express();
 
-// Middleware setup (must come before routes and app.listen)
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Basic Auth Middleware
 const auth = (req, res, next) => {
     const user = basicAuth(req);
     const username = process.env.AUTH_USERNAME || 'defaultuser';
@@ -24,7 +22,6 @@ const auth = (req, res, next) => {
 
 app.use(auth);
 
-// Database connection
 const db = new sqlite3.Database('budget.db', (err) => {
     if (err) console.error('Database connection error:', err);
     else console.log('Connected to database');
@@ -37,13 +34,13 @@ db.serialize(() => {
         amount REAL,
         location TEXT CHECK(location IN ('Cash', 'Bank', 'MyTabung')),
         date TEXT
-    )`, (err) => { if (err) console.error('Error creating money table:', err); });
+    )`, err => err && console.error('Error creating money table:', err));
 
     db.run(`CREATE TABLE IF NOT EXISTS categories (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT UNIQUE,
         budget REAL
-    )`, (err) => { if (err) console.error('Error creating categories table:', err); });
+    )`, err => err && console.error('Error creating categories table:', err));
 
     db.run(`CREATE TABLE IF NOT EXISTS expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,14 +50,14 @@ db.serialize(() => {
         category_id INTEGER,
         date TEXT,
         FOREIGN KEY (category_id) REFERENCES categories(id)
-    )`, (err) => { if (err) console.error('Error creating expenses table:', err); });
+    )`, err => err && console.error('Error creating expenses table:', err));
 
     db.run(`CREATE TABLE IF NOT EXISTS goals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         target_amount REAL,
         deadline TEXT
-    )`, (err) => { if (err) console.error('Error creating goals table:', err); });
+    )`, err => err && console.error('Error creating goals table:', err));
 
     db.run(`CREATE TABLE IF NOT EXISTS expenses_archive (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +67,7 @@ db.serialize(() => {
         category_id INTEGER,
         date TEXT,
         archive_date TEXT
-    )`, (err) => { if (err) console.error('Error creating expenses_archive table:', err); });
+    )`, err => err && console.error('Error creating expenses_archive table:', err));
 
     db.run(`CREATE TABLE IF NOT EXISTS bills (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -80,28 +77,33 @@ db.serialize(() => {
         paid INTEGER DEFAULT 0,
         due_date TEXT,
         date TEXT
-    )`, (err) => { if (err) console.error('Error creating bills table:', err); });
+    )`, err => err && console.error('Error creating bills table:', err));
 
-    db.run(`ALTER TABLE bills ADD COLUMN due_date TEXT`, (err) => {
-        if (err && err.message.includes('duplicate column name')) {
-            console.log('due_date column already exists in bills table');
-        } else if (err) {
-            console.error('Error adding due_date column:', err);
-        } else {
-            console.log('Added due_date column to bills table');
-        }
-    });
-
+    // Ensure "Bills" category exists (run once)
     db.get('SELECT id FROM categories WHERE name = "Bills"', [], (err, row) => {
-        if (!row) {
-            db.run('INSERT INTO categories (name, budget) VALUES ("Bills", 0)', (err) => {
-                if (err) console.error('Error creating Bills category:', err);
-            });
+        if (!row && !err) {
+            db.run('INSERT INTO categories (name, budget) VALUES ("Bills", 0)', err => 
+                err && console.error('Error creating Bills category:', err));
         }
     });
 });
 
-// Money Endpoints
+// Helper to add months to a date
+const addMonths = (dateStr, months) => {
+    const date = new Date(dateStr);
+    date.setMonth(date.getMonth() + months);
+    return date.toISOString().split('T')[0];
+};
+
+// Helper to check if today is 5 days before due_date
+const isFiveDaysBefore = (dueDateStr) => {
+    const dueDate = new Date(dueDateStr);
+    const fiveDaysBefore = new Date(dueDate);
+    fiveDaysBefore.setDate(dueDate.getDate() - 5);
+    return new Date() >= fiveDaysBefore && new Date() < dueDate;
+};
+
+// Money Endpoints (unchanged)
 app.get('/api/money', (req, res) => {
     db.all('SELECT * FROM money', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -130,7 +132,7 @@ app.put('/api/money/:id', (req, res) => {
         });
 });
 
-// Category Endpoints
+// Category Endpoints (unchanged)
 app.get('/api/categories', (req, res) => {
     db.all('SELECT * FROM categories', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -166,7 +168,7 @@ app.delete('/api/categories/:id', (req, res) => {
     });
 });
 
-// Expenses Endpoints
+// Expenses Endpoints (unchanged)
 app.get('/api/expenses', (req, res) => {
     db.all('SELECT e.*, c.name as category_name FROM expenses e LEFT JOIN categories c ON e.category_id = c.id',
         [], (err, rows) => {
@@ -203,7 +205,7 @@ app.delete('/api/expenses/:id', (req, res) => {
     });
 });
 
-// Goals Endpoints
+// Goals Endpoints (unchanged)
 app.get('/api/goals', (req, res) => {
     db.all('SELECT * FROM goals', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
@@ -232,7 +234,17 @@ app.delete('/api/goals/:id', (req, res) => {
 app.get('/api/bills', (req, res) => {
     db.all('SELECT * FROM bills', [], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json(rows);
+        // Revert paid status if 5 days before due_date
+        rows.forEach(bill => {
+            if (bill.paid && isFiveDaysBefore(bill.due_date)) {
+                db.run('UPDATE bills SET paid = 0 WHERE id = ?', [bill.id], err => 
+                    err && console.error('Error reverting bill status:', err));
+            }
+        });
+        db.all('SELECT * FROM bills', [], (err, updatedRows) => {
+            if (err) return res.status(500).json({ error: err.message });
+            res.json(updatedRows);
+        });
     });
 });
 
@@ -251,13 +263,12 @@ app.put('/api/bills/:id', (req, res) => {
     db.run('UPDATE bills SET name = ?, amount = ?, is_fixed = ?, due_date = ?, paid = ? WHERE id = ?',
         [name, amount, is_fixed, due_date, paid ?? 0, req.params.id],
         function(err) {
-            if (err) {
-                console.error('Error updating bill:', err);
-                return res.status(500).json({ error: err.message });
-            }
-            if (this.changes === 0) {
-                console.error(`Bill with ID ${req.params.id} not found`);
-                return res.status(404).json({ error: 'Bill not found' });
+            if (err) return res.status(500).json({ error: err.message });
+            if (this.changes === 0) return res.status(404).json({ error: 'Bill not found' });
+            if (paid && is_fixed) { // Recur fixed bills when marked paid
+                db.run('INSERT INTO bills (name, amount, is_fixed, due_date, date) VALUES (?, ?, ?, ?, ?)',
+                    [name, amount, is_fixed, addMonths(due_date, 1), new Date().toISOString()],
+                    err => err && console.error('Error recurring bill:', err));
             }
             res.json({ success: true });
         });
@@ -270,77 +281,40 @@ app.delete('/api/bills/:id', (req, res) => {
     });
 });
 
-// Reset Endpoint
+// Reset Endpoint (unchanged)
 app.post('/api/reset', (req, res) => {
     db.serialize(() => {
         db.run(
             `INSERT INTO expenses_archive (amount, description, source, category_id, date, archive_date)
              SELECT amount, description, source, category_id, date, ? FROM expenses`,
             [new Date().toISOString()],
-            (err) => {
-                if (err) {
-                    console.error('Error archiving expenses:', err);
-                    return res.status(500).json({ error: err.message });
-                }
-            }
+            err => err && console.error('Error archiving expenses:', err)
         );
 
         db.all('SELECT * FROM categories', [], (err, categories) => {
-            if (err) {
-                console.error('Error fetching categories:', err);
-                return res.status(500).json({ error: err.message });
-            }
+            if (err) return res.status(500).json({ error: err.message });
             db.all('SELECT * FROM expenses', [], (err, expenses) => {
-                if (err) {
-                    console.error('Error fetching expenses:', err);
-                    return res.status(500).json({ error: err.message });
-                }
+                if (err) return res.status(500).json({ error: err.message });
 
                 categories.forEach(cat => {
                     if (cat.name !== 'Bills') {
-                        const spent = expenses
-                            .filter(e => e.category_id === cat.id)
-                            .reduce((sum, e) => sum + e.amount, 0);
+                        const spent = expenses.filter(e => e.category_id === cat.id).reduce((sum, e) => sum + e.amount, 0);
                         const carryover = cat.budget - spent;
-                        db.run(
-                            'UPDATE categories SET budget = ? WHERE id = ?',
-                            [Math.max(0, cat.budget + carryover), cat.id],
-                            (err) => {
-                                if (err) console.error('Error updating budget for category', cat.name, ':', err);
-                            }
-                        );
+                        db.run('UPDATE categories SET budget = ? WHERE id = ?', [Math.max(0, cat.budget + carryover), cat.id],
+                            err => err && console.error('Error updating budget for category', cat.name, ':', err));
                     }
                 });
 
-                db.run(
-                    'UPDATE bills SET paid = 0',
-                    (err) => {
-                        if (err) {
-                            console.error('Error resetting bills to unpaid:', err);
-                            return res.status(500).json({ error: err.message });
-                        }
-                    }
-                );
+                db.run('UPDATE bills SET paid = 0', err => err && console.error('Error resetting bills:', err));
 
                 db.all('SELECT * FROM bills', [], (err, bills) => {
-                    if (err) {
-                        console.error('Error fetching bills:', err);
-                        return res.status(500).json({ error: err.message });
-                    }
+                    if (err) return res.status(500).json({ error: err.message });
                     const totalBillsBudget = bills.reduce((sum, bill) => sum + (bill.amount || 0), 0);
-                    db.run(
-                        'UPDATE categories SET budget = ? WHERE name = "Bills"',
-                        [totalBillsBudget],
-                        (err) => {
-                            if (err) console.error('Error updating Bills category budget:', err);
-                        }
-                    );
+                    db.run('UPDATE categories SET budget = ? WHERE name = "Bills"', [totalBillsBudget],
+                        err => err && console.error('Error updating Bills budget:', err));
 
-                    db.run('DELETE FROM expenses', (err) => {
-                        if (err) {
-                            console.error('Error deleting expenses:', err);
-                            return res.status(500).json({ error: err.message });
-                        }
+                    db.run('DELETE FROM expenses', err => {
+                        if (err) return res.status(500).json({ error: err.message });
                         res.json({ success: true });
                     });
                 });
@@ -349,8 +323,5 @@ app.post('/api/reset', (req, res) => {
     });
 });
 
-// Start the server (only once, at the end)
 const port = process.env.PORT || 3001;
-app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
-});
+app.listen(port, () => console.log(`Server running at http://localhost:${port}`));
