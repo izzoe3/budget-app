@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Budget Tracker</title>
+    <style>
+        :root {
+            --primary: #4a90e2;
+            --secondary: #f5f7fa;
+            --accent: #34c759;
+            --text: #2c3e50;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            --gradient: linear-gradient(135deg, #4a90e2, #357abd);
+            --warning: #f39c12;
+            --danger: #ff4444;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Poppins', sans-serif;
+        }
+        body {
+            background: #f0f2f5;
+            color: var(--text);
+            line-height: 1.6;
+            padding: 15px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: var(--shadow);
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .total {
+            font-size: 32px;
+            font-weight: 600;
+            background: var(--gradient);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .balances {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .content {
+            flex: 1;
+        }
+        .tab { display: none; }
+        .tab.active { display: block; }
+        .action-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 10px 0;
+        }
+        .btn {
+            flex: 1;
+            padding: 15px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.2s ease, background 0.3s ease;
+            box-shadow: var(--shadow);
+            min-width: 120px;
+        }
+        .btn:hover {
+            background: #357abd;
+            transform: translateY(-2px);
+        }
+        .btn.accent {
+            background: var(--accent);
+        }
+        .btn.accent:hover {
+            background: #28a745;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            justify-content: center;
+            align-items: center;
+        }
+        .modal-content {
+            background: white;
+            padding: 20px;
+            border-radius: 20px 20px 0 0;
+            width: 100%;
+            max-width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: var(--shadow);
+            animation: slideUp 0.3s ease;
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .modal-header h2 {
+            font-size: 20px;
+            color: var(--text);
+        }
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #888;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            background: #fff;
+        }
+        .modal-btn {
+            width: 100%;
+            padding: 15px;
+            background: var(--gradient);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: var(--shadow);
+        }
+        .modal-btn:hover {
+            background: #357abd;
+        }
+        .history-item, .bill-item {
+            padding: 12px;
+            border-bottom: 1px solid #eee;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+        .history-item button, .bill-item button {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .history-item button.edit {
+            background: var(--warning);
+        }
+        .bill-item button.paid {
+            background: var(--accent);
+        }
+        .category-card, .goal-card {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 10px;
+            box-shadow: var(--shadow);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .category-card.nearing { background: #fff3e0; }
+        .category-card.over { background: #ffe6e6; }
+        .category-card button, .goal-card button {
+            background: var(--danger);
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 10px;
+            background: #ddd;
+            border-radius: 5px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        .progress {
+            height: 100%;
+            background: var(--accent);
+            transition: width 0.3s ease;
+        }
+        .nav-bar {
+            position: sticky;
+            bottom: 0;
+            background: white;
+            padding: 10px;
+            border-radius: 15px 15px 0 0;
+            box-shadow: var(--shadow);
+            display: flex;
+            justify-content: space-around;
+            z-index: 100;
+        }
+        .nav-btn {
+            padding: 10px 20px;
+            background: none;
+            border: none;
+            font-size: 16px;
+            color: var(--text);
+            cursor: pointer;
+            transition: color 0.3s ease;
+        }
+        .nav-btn.active {
+            color: var(--primary);
+            font-weight: 600;
+        }
+        @keyframes slideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        @media (max-width: 500px) {
+            .btn { min-width: 100%; }
+            .action-buttons { flex-direction: column; }
+            .balances { flex-direction: column; text-align: center; }
+            .nav-btn { font-size: 14px; padding: 10px; }
+        }
+        /* Bills History Modal */
+        #billsHistoryModal {
+            z-index: 1000; /* Base level for history modal */
+        }
+
+        /* Bill Form Modal */
+        #billForm {
+            z-index: 1100; /* Higher than billsHistoryModal */
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="header">
+        <div class="total" id="totalAmount">$0.00</div>
+        <div class="balances">
+            <span>Cash: $<span id="cashBalance">0.00</span></span>
+            <span>Bank: $<span id="bankBalance">0.00</span></span>
+            <span>MyTabung: $<span id="mytabungBalance">0.00</span></span>
+        </div>
+    </div>
+
+    <div class="content">
+        <div id="expenses" class="tab active">
+            <div class="action-buttons">
+                <button class="btn accent" onclick="showModal('expenseForm')">Add Expense</button>
+                <button class="btn" onclick="showModal('expenseHistoryModal')">History</button>
+            </div>
+        </div>
+
+        <div id="budget" class="tab">
+            <div class="action-buttons">
+                <button class="btn accent" onclick="showModal('moneyForm')">Add Money</button>
+                <button class="btn" onclick="showModal('categoryForm')">Add Category</button>
+                <button class="btn" onclick="showModal('moneyHistoryModal')">Money History</button>
+                <button class="btn" onclick="showModal('budgetHistoryModal')">Budget History</button>
+                <button class="btn" onclick="resetBudget()">Reset Budget</button>
+            </div>
+            <div id="categoryList"></div>
+        </div>
+
+        <div id="goals" class="tab">
+            <div class="action-buttons">
+                <button class="btn accent" onclick="showModal('goalForm')">Add Goal</button>
+            </div>
+            <div id="goalList"></div>
+        </div>
+
+        <div id="bills" class="tab">
+            <div class="action-buttons">
+                <button class="btn accent" onclick="showModal('billForm')">Add Bill</button>
+                <button class="btn" onclick="showModal('billsHistoryModal')">Bills History</button>
+            </div>
+            <div id="billList"></div> <!-- Unpaid bills -->
+        </div>
+    </div>
+
+    <!-- Expense Form Modal -->
+    <div id="expenseForm" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="expenseFormTitle">Add Expense</h2>
+                <button class="close-btn" onclick="hideModal('expenseForm')">×</button>
+            </div>
+            <div class="form-group">
+                <input type="number" id="expAmount" placeholder="Amount" step="0.01">
+                <input type="text" id="description" placeholder="Description">
+                <select id="moneySource">
+                    <option value="Cash">Cash</option>
+                    <option value="Bank">Bank</option>
+                </select>
+                <select id="categorySelect">
+                    <option value="">Select Category</option>
+                </select>
+                <button class="modal-btn" id="expenseFormButton" onclick="addExpense()">Add Expense</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Expense History Modal -->
+    <div id="expenseHistoryModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Expense History</h2>
+                <button class="close-btn" onclick="hideModal('expenseHistoryModal')">×</button>
+            </div>
+            <div id="expenseHistory"></div>
+        </div>
+    </div>
+
+    <!-- Money Form Modal -->
+    <div id="moneyForm" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="moneyFormTitle">Add Money</h2>
+                <button class="close-btn" onclick="hideModal('moneyForm')">×</button>
+            </div>
+            <div class="form-group">
+                <input type="number" id="moneyAmount" placeholder="Amount" step="0.01">
+                <select id="moneyLocation">
+                    <option value="Cash">Cash</option>
+                    <option value="Bank">Bank</option>
+                    <option value="MyTabung">MyTabung</option>
+                </select>
+                <button class="modal-btn" id="moneyFormButton" onclick="addMoney()">Add Money</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Category Form Modal -->
+    <div id="categoryForm" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add Category</h2>
+                <button class="close-btn" onclick="hideModal('categoryForm')">×</button>
+            </div>
+            <div class="form-group">
+                <input type="text" id="categoryName" placeholder="Category Name">
+                <input type="number" id="categoryAmount" placeholder="Budget Amount" step="0.01">
+                <button class="modal-btn" onclick="addCategory()">Add Category</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Money History Modal -->
+    <div id="moneyHistoryModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Money History</h2>
+                <button class="close-btn" onclick="hideModal('moneyHistoryModal')">×</button>
+            </div>
+            <div id="moneyHistory"></div>
+        </div>
+    </div>
+
+    <!-- Budget History Modal -->
+    <div id="budgetHistoryModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Budget History</h2>
+                <button class="close-btn" onclick="hideModal('budgetHistoryModal')">×</button>
+            </div>
+            <div id="budgetHistory"></div>
+        </div>
+    </div>
+
+    <!-- Goal Form Modal -->
+    <div id="goalForm" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add Goal</h2>
+                <button class="close-btn" onclick="hideModal('goalForm')">×</button>
+            </div>
+            <div class="form-group">
+                <input type="text" id="goalName" placeholder="Goal Name">
+                <input type="number" id="goalAmount" placeholder="Target Amount" step="0.01">
+                <input type="date" id="goalDeadline" placeholder="Deadline">
+                <button class="modal-btn" onclick="addGoal()">Add Goal</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bill Form Modal -->
+<div id="billForm" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="billFormTitle">Add Bill</h2>
+            <button class="close-btn" onclick="hideModal('billForm')">×</button>
+        </div>
+        <div class="form-group">
+            <input type="text" id="billName" placeholder="Bill Name">
+            <input type="number" id="billAmount" placeholder="Amount" step="0.01">
+            <input type="date" id="billDueDate" placeholder="Due Date">
+            <select id="billType">
+                <option value="1">Fixed</option>
+                <option value="0">Dynamic</option>
+            </select>
+            <button id="billFormButton" class="modal-btn" onclick="saveBill()">Add Bill</button>
+        </div>
+    </div>
+</div>
+
+    <!-- Bills History Modal -->
+<div id="billsHistoryModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Bills History</h2>
+            <button class="close-btn" onclick="hideModal('billsHistoryModal')">×</button>
+        </div>
+        <div id="billsHistory"></div>
+    </div>
+</div>
+
+<!-- Bill Form Modal -->
+<div id="billForm" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="billFormTitle">Add Bill</h2>
+            <button class="close-btn" onclick="hideModal('billForm')">×</button>
+        </div>
+        <div class="form-group">
+            <input type="text" id="billName" placeholder="Bill Name">
+            <input type="number" id="billAmount" placeholder="Amount" step="0.01">
+            <input type="date" id="billDueDate" placeholder="Due Date">
+            <select id="billType">
+                <option value="1">Fixed</option>
+                <option value="0">Dynamic</option>
+            </select>
+            <button id="billFormButton" class="modal-btn" onclick="saveBill()">Add Bill</button>
+        </div>
+    </div>
+</div>
+
+    <div class="nav-bar">
+        <button class="nav-btn active" onclick="showTab('expenses')">Expenses</button>
+        <button class="nav-btn" onclick="showTab('budget')">Budget</button>
+        <button class="nav-btn" onclick="showTab('goals')">Goals</button>
+        <button class="nav-btn" onclick="showTab('bills')">Bills</button>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
