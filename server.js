@@ -1,6 +1,7 @@
 const express = require('express');
 const sqlite3 = require('sqlite3');
 const cors = require('cors');
+const basicAuth = require('basic-auth');
 const app = express();
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
@@ -15,6 +16,21 @@ const db = new sqlite3.Database('budget.db', (err) => {
     if (err) console.error('Database connection error:', err);
     else console.log('Connected to database');
 });
+
+// Basic Auth Middleware
+const auth = (req, res, next) => {
+    const user = basicAuth(req);
+    const username = 'yourusername'; // Set your username
+    const password = 'yourpassword'; // Set your password
+    if (!user || user.name !== username || user.pass !== password) {
+        res.set('WWW-Authenticate', 'Basic realm="Private Area"');
+        return res.status(401).send('Unauthorized');
+    }
+    next();
+};
+
+// Apply auth to all routes
+app.use(auth);
 
 // Initialize database tables
 db.serialize(() => {
@@ -89,6 +105,8 @@ db.serialize(() => {
         }
     });
 });
+
+
 
 // Money Endpoints
 app.get('/api/money', (req, res) => {
