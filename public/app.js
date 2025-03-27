@@ -17,6 +17,9 @@ async function loadData() {
             fetch('/api/goals'),
             fetch('/api/bills')
         ]);
+        if (!moneyRes.ok || !catRes.ok || !expRes.ok || !goalRes.ok || !billRes.ok) {
+            throw new Error('Failed to fetch data from server');
+        }
         money = await moneyRes.json();
         categories = await catRes.json();
         expenses = await expRes.json();
@@ -170,18 +173,29 @@ function updateDisplay() {
 async function addMoney() {
     const amount = parseFloat(document.getElementById('moneyAmount').value);
     const location = document.getElementById('moneyLocation').value;
-    if (!amount) return showError('Please enter an amount');
+    const validLocations = ['Cash', 'Bank', 'MyTabung'];
+
+    if (!amount || isNaN(amount) || amount <= 0) {
+        return showError('Please enter a positive amount');
+    }
+    if (!validLocations.includes(location)) {
+        return showError('Please select a valid location (Cash, Bank, MyTabung)');
+    }
+
     try {
         const response = await fetch(editingMoneyId ? `/api/money/${editingMoneyId}` : '/api/money', {
             method: editingMoneyId ? 'PUT' : 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ amount, location })
         });
-        if (!response.ok) throw new Error(editingMoneyId ? 'Failed to update money' : 'Failed to add money');
+        const responseData = await response.json();
+        if (!response.ok) {
+            throw new Error(responseData.error || (editingMoneyId ? 'Failed to update money' : 'Failed to add money'));
+        }
         resetForm('moneyForm');
         await loadData();
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error adding/updating money:', error.message);
         showError(error.message);
     }
 }
@@ -229,11 +243,11 @@ async function addExpense() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ amount, description, source, category_id })
         });
-        if (!response.ok) throw new Error(editingExpenseId ? 'Failed to update expense' : 'Failed to add expense');
+        if (!response.ok) throw new Error(await response.text());
         resetForm('expenseForm');
         await loadData();
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error adding/updating expense:', error);
         showError(error.message);
     }
 }
@@ -274,7 +288,7 @@ async function addCategory() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, budget })
         });
-        if (!response.ok) throw new Error('Failed to add category');
+        if (!response.ok) throw new Error(await response.text());
         resetForm('categoryForm');
         await loadData();
     } catch (error) {
@@ -289,7 +303,7 @@ async function deleteCategory(id) {
     if (expenses.some(exp => exp.category_id === id)) return showError('Cannot delete category with existing expenses');
     try {
         const response = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
-        if (!response.ok) throw new Error('Failed to delete category');
+        if (!response.ok) throw new Error(await response.text());
         await loadData();
     } catch (error) {
         console.error('Error deleting category:', error);
@@ -308,7 +322,7 @@ async function addGoal() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, target_amount, deadline })
         });
-        if (!response.ok) throw new Error('Failed to add goal');
+        if (!response.ok) throw new Error(await response.text());
         resetForm('goalForm');
         await loadData();
     } catch (error) {
@@ -320,7 +334,7 @@ async function addGoal() {
 async function deleteGoal(id) {
     try {
         const response = await fetch(`/api/goals/${id}`, { method: 'DELETE' });
-        if (!response.ok) throw new Error('Failed to delete goal');
+        if (!response.ok) throw new Error(await response.text());
         await loadData();
     } catch (error) {
         console.error('Error deleting goal:', error);
@@ -348,7 +362,7 @@ async function saveBill() {
         resetForm('billForm');
         await loadData();
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error saving bill:', error);
         showError(error.message);
     }
 }
@@ -419,7 +433,7 @@ async function markBillPaid(id, button) {
                     category_id: billsCategory.id
                 })
             });
-            if (!expenseResponse.ok) throw new Error('Failed to record expense');
+            if (!expenseResponse.ok) throw new Error(await expenseResponse.text());
         }
         await loadData();
     } catch (error) {
@@ -448,7 +462,7 @@ async function deleteBill(id, button) {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' }
         });
-        if (!billResponse.ok) throw new Error('Failed to delete bill');
+        if (!billResponse.ok) throw new Error(await billResponse.text());
 
         if (bill.paid) {
             const expense = expenses.find(e => e.description === `Paid: ${bill.name}`);
@@ -457,7 +471,7 @@ async function deleteBill(id, button) {
                     method: 'DELETE',
                     headers: { 'Content-Type': 'application/json' }
                 });
-                if (!expenseResponse.ok) throw new Error('Failed to delete associated expense');
+                if (!expenseResponse.ok) throw new Error(await expenseResponse.text());
             }
         }
         await loadData();
@@ -494,7 +508,7 @@ async function resetBudget() {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
-        if (!response.ok) throw new Error('Failed to reset budget');
+        if (!response.ok) throw new Error(await response.text());
         await loadData();
         alert('Budget reset successfully!');
     } catch (error) {

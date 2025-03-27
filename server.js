@@ -7,7 +7,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
+app.use(express.static('public')); // Serve static files before auth
 
 const auth = (req, res, next) => {
   const user = basicAuth(req);
@@ -23,8 +23,8 @@ const auth = (req, res, next) => {
 app.use(auth);
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:your_local_password@localhost:5432/budget_app',
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
 });
 
 // Initialize database tables
@@ -83,7 +83,7 @@ const pool = new Pool({
     }
     console.log('Connected to database');
   } catch (err) {
-    console.error('Database connection or initialization error:', err);
+    console.error('Database connection or initialization error:', err.stack);
   }
 })();
 
@@ -100,12 +100,21 @@ app.get('/api/money', async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM money');
     res.json(rows);
   } catch (err) {
+    console.error('Error fetching money:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/api/money', async (req, res) => {
   const { amount, location } = req.body;
+  console.log('POST /api/money request:', { amount, location }); // Log input
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Amount must be a positive number' });
+  }
+  const validLocations = ['Cash', 'Bank', 'MyTabung'];
+  if (!location || !validLocations.includes(location)) {
+    return res.status(400).json({ error: `Location must be one of: ${validLocations.join(', ')}` });
+  }
   try {
     const { rows } = await pool.query(
       'INSERT INTO money (amount, location, date) VALUES ($1, $2, $3) RETURNING id',
@@ -113,12 +122,21 @@ app.post('/api/money', async (req, res) => {
     );
     res.json({ id: rows[0].id });
   } catch (err) {
+    console.error('Error adding money:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.put('/api/money/:id', async (req, res) => {
   const { amount, location } = req.body;
+  console.log('PUT /api/money/:id request:', { id: req.params.id, amount, location }); // Log input
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Amount must be a positive number' });
+  }
+  const validLocations = ['Cash', 'Bank', 'MyTabung'];
+  if (!location || !validLocations.includes(location)) {
+    return res.status(400).json({ error: `Location must be one of: ${validLocations.join(', ')}` });
+  }
   try {
     const { rowCount } = await pool.query(
       'UPDATE money SET amount = $1, location = $2 WHERE id = $3',
@@ -127,6 +145,7 @@ app.put('/api/money/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Money entry not found' });
     res.json({ success: true });
   } catch (err) {
+    console.error('Error updating money:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -137,6 +156,7 @@ app.get('/api/categories', async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM categories');
     res.json(rows);
   } catch (err) {
+    console.error('Error fetching categories:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -150,6 +170,7 @@ app.post('/api/categories', async (req, res) => {
     );
     res.json({ id: rows[0].id });
   } catch (err) {
+    console.error('Error adding category:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -164,6 +185,7 @@ app.put('/api/categories/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Category not found' });
     res.json({ success: true });
   } catch (err) {
+    console.error('Error updating category:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -174,6 +196,7 @@ app.delete('/api/categories/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Category not found' });
     res.json({ success: true });
   } catch (err) {
+    console.error('Error deleting category:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -186,22 +209,35 @@ app.get('/api/expenses', async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
+    console.error('Error fetching expenses:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/api/expenses', async (req, res) => {
-  const { amount, description, source, category_id } = req.body;
-  try {
-    const { rows } = await pool.query(
-      'INSERT INTO expenses (amount, description, source, category_id, date) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [amount, description, source, category_id || null, new Date().toISOString()]
-    );
-    res.json({ id: rows[0].id });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+    const { amount, description, source, category_id } = req.body;
+    console.log('POST /api/expenses request:', { amount, description, source, category_id }); // Log input
+    if (!amount || isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Amount must be a positive number' });
+    }
+    if (!description) {
+      return res.status(400).json({ error: 'Description is required' });
+    }
+    const validSources = ['Cash', 'Bank'];
+    if (!source || !validSources.includes(source)) {
+      return res.status(400).json({ error: `Source must be one of: ${validSources.join(', ')}` });
+    }
+    try {
+      const { rows } = await pool.query(
+        'INSERT INTO expenses (amount, description, source, category_id, date) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [amount, description, source, category_id || null, new Date().toISOString()]
+      );
+      res.json({ id: rows[0].id });
+    } catch (err) {
+      console.error('Error adding expense:', err.stack);
+      res.status(500).json({ error: err.message });
+    }
+  });
 
 app.put('/api/expenses/:id', async (req, res) => {
   const { amount, description, source, category_id } = req.body;
@@ -213,6 +249,7 @@ app.put('/api/expenses/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Expense not found' });
     res.json({ success: true });
   } catch (err) {
+    console.error('Error updating expense:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -223,6 +260,7 @@ app.delete('/api/expenses/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Expense not found' });
     res.json({ success: true });
   } catch (err) {
+    console.error('Error deleting expense:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -233,6 +271,7 @@ app.get('/api/goals', async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM goals');
     res.json(rows);
   } catch (err) {
+    console.error('Error fetching goals:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -246,6 +285,7 @@ app.post('/api/goals', async (req, res) => {
     );
     res.json({ id: rows[0].id });
   } catch (err) {
+    console.error('Error adding goal:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -256,6 +296,7 @@ app.delete('/api/goals/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Goal not found' });
     res.json({ success: true });
   } catch (err) {
+    console.error('Error deleting goal:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -266,6 +307,7 @@ app.get('/api/bills', async (req, res) => {
     const { rows } = await pool.query('SELECT * FROM bills');
     res.json(rows);
   } catch (err) {
+    console.error('Error fetching bills:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -279,6 +321,7 @@ app.post('/api/bills', async (req, res) => {
     );
     res.json({ id: rows[0].id });
   } catch (err) {
+    console.error('Error adding bill:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -308,6 +351,7 @@ app.put('/api/bills/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     await client.query('ROLLBACK');
+    console.error('Error updating bill:', err.stack);
     res.status(err.message === 'Bill not found' ? 404 : 500).json({ error: err.message });
   } finally {
     client.release();
@@ -320,6 +364,7 @@ app.delete('/api/bills/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Bill not found' });
     res.json({ success: true });
   } catch (err) {
+    console.error('Error deleting bill:', err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -362,6 +407,7 @@ app.post('/api/reset', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     await client.query('ROLLBACK');
+    console.error('Error resetting budget:', err.stack);
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
