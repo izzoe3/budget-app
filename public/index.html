@@ -44,6 +44,7 @@
         .history-item button, .bill-item button { background: var(--danger); color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; }
         .history-item button.edit { background: var(--warning); }
         .bill-item button.paid { background: var(--accent); }
+        .bill-item button.paid:hover { background: #28a745; }
         .category-card, .goal-card { background: white; padding: 15px; border-radius: 10px; margin-bottom: 10px; box-shadow: var(--shadow); display: flex; justify-content: space-between; align-items: center; }
         .category-card.nearing { background: #fff3e0; }
         .category-card.over { background: #ffe6e6; }
@@ -58,18 +59,14 @@
         /* Explicit z-index for modals */
         #billsHistoryModal { z-index: 1000; }
         #billForm { z-index: 1100; }
-        .bill-item .delete {
-            background: var(--danger);
-            color: white;
-            border: none;
-            padding: 5px 10px;
-            border-radius: 5px;
-            cursor: pointer;
-            margin-left: 5px;
-        }
-        .bill-item .delete:hover {
-            background: #cc0000;
-        }
+        /* Updated styles for bills page */
+        #unpaidBills, #paidBills { margin-top: 20px; }
+        #unpaidBills h3 { color: #ff4444; } /* Red for urgency */
+        #paidBills h3 { color: #33cc33; } /* Green for completed */
+        #unpaidBillsList, #paidBillsList { display: flex; flex-direction: column; gap: 10px; }
+        .bill-item { padding: 10px; background: #f9f9f9; border-radius: 5px; }
+        .bill-item .delete { background: var(--danger); color: white; border: none; padding: 5px 10px; border-radius: 5px; cursor: pointer; margin-left: 5px; }
+        .bill-item .delete:hover { background: #cc0000; }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
@@ -114,7 +111,14 @@
                 <button class="btn accent" onclick="showModal('billForm')">Add Bill</button>
                 <button class="btn" onclick="showModal('billsHistoryModal')">Bills History</button>
             </div>
-            <div id="billList"></div>
+            <div id="unpaidBills">
+                <h3>Unpaid Bills</h3>
+                <div id="unpaidBillsList"></div>
+            </div>
+            <div id="paidBills">
+                <h3>Paid Bills This Month</h3>
+                <div id="paidBillsList"></div>
+            </div>
         </div>
     </div>
 

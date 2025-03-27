@@ -45,12 +45,20 @@ function calculateTotals() {
     };
 }
 
+function isWithinFiveDays(dueDate) {
+    const today = new Date();
+    const due = new Date(dueDate);
+    const diffTime = due - today;
+    const diffDays = diffTime / (1000 * 60 * 60 * 24);
+    return diffDays <= 5; // Show if due within 5 days or overdue
+}
+
 function updateDisplay() {
     const totals = calculateTotals();
     document.getElementById('totalAmount').textContent = 
         currentTab === 'expenses' ? `RM ${totals.spendable.toFixed(2)}`
         : currentTab === 'goals' ? `RM ${totals.mytabung.toFixed(2)}`
-        : currentTab === 'bills' ? `RM ${bills.filter(b => !b.paid).reduce((sum, b) => sum + (b.amount || 0), 0).toFixed(2)}`
+        : currentTab === 'bills' ? `RM ${bills.filter(b => !b.paid && isWithinFiveDays(b.due_date)).reduce((sum, b) => sum + (b.amount || 0), 0).toFixed(2)}`
         : `RM ${totals.total.toFixed(2)}`;
     document.getElementById('cashBalance').textContent = totals.cash.toFixed(2);
     document.getElementById('bankBalance').textContent = totals.bank.toFixed(2);
@@ -58,7 +66,7 @@ function updateDisplay() {
 
     const billsCategory = categories.find(cat => cat.name === 'Bills');
     if (billsCategory) {
-        const totalBillsBudget = bills.filter(b => !b.paid).reduce((sum, b) => sum + (b.amount || 0), 0);
+        const totalBillsBudget = bills.filter(b => !b.paid && isWithinFiveDays(b.due_date)).reduce((sum, b) => sum + (b.amount || 0), 0);
         fetch(`/api/categories/${billsCategory.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -129,14 +137,25 @@ function updateDisplay() {
         `;
     }).join('');
 
-    const billList = document.getElementById('billList');
-    billList.innerHTML = bills.filter(b => !b.paid).map(bill => `
+    const unpaidBillsList = document.getElementById('unpaidBillsList');
+    unpaidBillsList.innerHTML = bills.filter(b => !b.paid && isWithinFiveDays(b.due_date)).map(bill => `
         <div class="bill-item">
             <span>${bill.name}: RM ${bill.amount.toFixed(2)} (Due: ${bill.due_date})</span>
-            <button class="paid" id="paid-btn-${bill.id}" onclick="markBillPaid(${bill.id}, this)">Paid</button>
-            <button class="delete" id="delete-btn-${bill.id}" onclick="deleteBill(${bill.id}, this)">Delete</button>
+            <div>
+                <button class="paid" id="paid-btn-${bill.id}" onclick="markBillPaid(${bill.id}, this)">Paid</button>
+                <button class="delete" id="delete-btn-${bill.id}" onclick="deleteBill(${bill.id}, this)">Delete</button>
+            </div>
         </div>
-    `).join('') || '<div class="bill-item">No unpaid bills</div>';
+    `).join('') || '<div class="bill-item">No unpaid bills due within 5 days</div>';
+
+    const paidBillsList = document.getElementById('paidBillsList');
+    const currentMonth = new Date().toISOString().slice(0, 7); // e.g., "2025-03"
+    paidBillsList.innerHTML = bills.filter(b => b.paid && b.due_date.startsWith(currentMonth)).map(bill => `
+        <div class="bill-item">
+            <span>${bill.name}: RM ${bill.amount.toFixed(2)} (Due: ${bill.due_date})</span>
+            <span style="color: #33cc33;">Paid</span>
+        </div>
+    `).join('') || '<div class="bill-item">No bills paid this month</div>';
 
     const billsHistory = document.getElementById('billsHistory');
     billsHistory.innerHTML = bills.map(bill => `
@@ -425,14 +444,12 @@ async function deleteBill(id, button) {
     }
 
     try {
-        // Delete the bill
         const billResponse = await fetch(`/api/bills/${id}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' }
         });
         if (!billResponse.ok) throw new Error('Failed to delete bill');
 
-        // If the bill was paid, delete the associated expense
         if (bill.paid) {
             const expense = expenses.find(e => e.description === `Paid: ${bill.name}`);
             if (expense) {
