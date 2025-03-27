@@ -1,40 +1,37 @@
+require('dotenv').config();
 const express = require('express');
 const sqlite3 = require('sqlite3');
 const cors = require('cors');
 const basicAuth = require('basic-auth');
 const app = express();
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-    console.log(`Server running at http://localhost:${port}`);
-});
 
+// Middleware setup (must come before routes and app.listen)
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-const db = new sqlite3.Database('budget.db', (err) => {
-    if (err) console.error('Database connection error:', err);
-    else console.log('Connected to database');
-});
-
 // Basic Auth Middleware
 const auth = (req, res, next) => {
     const user = basicAuth(req);
-    const username = 'yourusername'; // Set your username
-    const password = 'yourpassword'; // Set your password
+    const username = process.env.AUTH_USERNAME || 'defaultuser';
+    const password = process.env.AUTH_PASSWORD || 'defaultpass';
     if (!user || user.name !== username || user.pass !== password) {
-        res.set('WWW-Authenticate', 'Basic realm="Private Area"');
+        res.set('WWW-Authenticate', 'Basic realm="Private Budget App"');
         return res.status(401).send('Unauthorized');
     }
     next();
 };
 
-// Apply auth to all routes
 app.use(auth);
+
+// Database connection
+const db = new sqlite3.Database('budget.db', (err) => {
+    if (err) console.error('Database connection error:', err);
+    else console.log('Connected to database');
+});
 
 // Initialize database tables
 db.serialize(() => {
-    // Create tables
     db.run(`CREATE TABLE IF NOT EXISTS money (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         amount REAL,
@@ -85,7 +82,6 @@ db.serialize(() => {
         date TEXT
     )`, (err) => { if (err) console.error('Error creating bills table:', err); });
 
-    // Migration: Add due_date column if it doesn’t exist
     db.run(`ALTER TABLE bills ADD COLUMN due_date TEXT`, (err) => {
         if (err && err.message.includes('duplicate column name')) {
             console.log('due_date column already exists in bills table');
@@ -96,7 +92,6 @@ db.serialize(() => {
         }
     });
 
-    // Ensure "Bills" category exists
     db.get('SELECT id FROM categories WHERE name = "Bills"', [], (err, row) => {
         if (!row) {
             db.run('INSERT INTO categories (name, budget) VALUES ("Bills", 0)', (err) => {
@@ -105,8 +100,6 @@ db.serialize(() => {
         }
     });
 });
-
-
 
 // Money Endpoints
 app.get('/api/money', (req, res) => {
@@ -356,6 +349,8 @@ app.post('/api/reset', (req, res) => {
     });
 });
 
+// Start the server (only once, at the end)
+const port = process.env.PORT || 3001;
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
 });
