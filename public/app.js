@@ -1,586 +1,414 @@
 let money = [];
 let categories = [];
 let expenses = [];
-let goals = [];
 let bills = [];
-let currentTab = 'expenses';
-let editingExpenseId = null;
-let editingMoneyId = null;
-let editingBillId = null;
+let currentHistoryTab = 'expenses';
 
 async function loadData() {
-    try {
-        const [moneyRes, catRes, expRes, goalRes, billRes] = await Promise.all([
-            fetch('/api/money'),
-            fetch('/api/categories'),
-            fetch('/api/expenses'),
-            fetch('/api/goals'),
-            fetch('/api/bills')
-        ]);
-        if (!moneyRes.ok || !catRes.ok || !expRes.ok || !goalRes.ok || !billRes.ok) {
-            throw new Error('Failed to fetch data from server');
-        }
-        money = await moneyRes.json();
-        categories = await catRes.json();
-        expenses = await expRes.json();
-        goals = await goalRes.json();
-        bills = await billRes.json();
-        updateDisplay();
-    } catch (error) {
-        console.error('Error loading data:', error);
-        showError('Failed to load data. Please try again later.');
-    }
+  try {
+    const [moneyRes, catRes, expRes, billRes] = await Promise.all([
+      fetch('/api/money'),
+      fetch('/api/categories'),
+      fetch('/api/expenses'),
+      fetch('/api/bills')
+    ]);
+    if (!moneyRes.ok || !catRes.ok || !expRes.ok || !billRes.ok) throw new Error('Failed to fetch data');
+    money = await moneyRes.json();
+    categories = await catRes.json();
+    expenses = await expRes.json();
+    bills = await billRes.json();
+    updateDisplay();
+  } catch (error) {
+    showError('Failed to load data');
+  }
 }
 
 function calculateTotals() {
-    const totalMoney = money.reduce((sum, m) => sum + m.amount, 0);
-    const cash = money.filter(m => m.location === 'Cash').reduce((sum, m) => sum + m.amount, 0);
-    const bank = money.filter(m => m.location === 'Bank').reduce((sum, m) => sum + m.amount, 0);
-    const mytabung = money.filter(m => m.location === 'MyTabung').reduce((sum, m) => sum + m.amount, 0);
-    const cashExpenses = expenses.filter(e => e.source === 'Cash').reduce((sum, e) => sum + e.amount, 0);
-    const bankExpenses = expenses.filter(e => e.source === 'Bank').reduce((sum, e) => sum + e.amount, 0);
-    return {
-        spendable: (cash + bank) - (cashExpenses + bankExpenses),
-        total: totalMoney - (cashExpenses + bankExpenses),
-        cash: cash - cashExpenses,
-        bank: bank - bankExpenses,
-        mytabung
-    };
+  const cashIncome = money.filter(m => m.location === 'Cash').reduce((sum, m) => sum + m.amount, 0);
+  const bankIncome = money.filter(m => m.location === 'Bank').reduce((sum, m) => sum + m.amount, 0);
+  const mytabung = money.filter(m => m.location === 'MyTabung').reduce((sum, m) => sum + m.amount, 0);
+  const cashExpenses = expenses.filter(e => e.source === 'Cash').reduce((sum, e) => sum + e.amount, 0);
+  const bankExpenses = expenses.filter(e => e.source === 'Bank').reduce((sum, e) => sum + e.amount, 0);
+  const cash = cashIncome - cashExpenses;
+  const bank = bankIncome - bankExpenses;
+  return {
+    spendable: cash + bank,
+    cash: cash,
+    bank: bank,
+    mytabung: mytabung
+  };
 }
 
-function isWithinFiveDays(dueDate) {
-    const today = new Date();
-    const due = new Date(dueDate);
-    const diffTime = due - today;
-    const diffDays = diffTime / (1000 * 60 * 60 * 24);
-    return diffDays <= 5; // Show if due within 5 days or overdue
+function isToday(dateStr) {
+  const today = new Date().toISOString().split('T')[0];
+  return dateStr.split('T')[0] === today;
 }
 
 function updateDisplay() {
-    const totals = calculateTotals();
-    document.getElementById('totalAmount').textContent = 
-        currentTab === 'expenses' ? `RM ${totals.spendable.toFixed(2)}`
-        : currentTab === 'goals' ? `RM ${totals.mytabung.toFixed(2)}`
-        : currentTab === 'bills' ? `RM ${bills.filter(b => !b.paid && isWithinFiveDays(b.due_date)).reduce((sum, b) => sum + (b.amount || 0), 0).toFixed(2)}`
-        : `RM ${totals.total.toFixed(2)}`;
-    document.getElementById('cashBalance').textContent = totals.cash.toFixed(2);
-    document.getElementById('bankBalance').textContent = totals.bank.toFixed(2);
-    document.getElementById('mytabungBalance').textContent = totals.mytabung.toFixed(2);
+  const totals = calculateTotals();
+  document.getElementById('totalAmount').textContent = `RM ${totals.spendable.toFixed(2)}`;
+  document.getElementById('cashBalance').textContent = totals.cash.toFixed(2);
+  document.getElementById('bankBalance').textContent = totals.bank.toFixed(2);
+  document.getElementById('mytabungBalance').textContent = totals.mytabung.toFixed(2);
 
-    const billsCategory = categories.find(cat => cat.name === 'Bills');
-    if (billsCategory) {
-        const totalBillsBudget = bills.filter(b => !b.paid && isWithinFiveDays(b.due_date)).reduce((sum, b) => sum + (b.amount || 0), 0);
-        fetch(`/api/categories/${billsCategory.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: 'Bills', budget: totalBillsBudget })
-        }).catch(err => console.error('Error updating Bills budget:', err));
+  const todaySpent = expenses.filter(e => isToday(e.date)).reduce((sum, e) => sum + e.amount, 0);
+  const todayAdded = money.filter(m => isToday(m.date)).reduce((sum, m) => sum + m.amount, 0);
+  document.getElementById('todaySummary').textContent = `Spent: RM ${todaySpent.toFixed(2)} | Added: RM ${todayAdded.toFixed(2)}`;
+
+  const todayExpenses = document.getElementById('todayExpenses');
+  todayExpenses.innerHTML = expenses.filter(e => isToday(e.date)).map(e => `
+    <div class="list-item">${e.description}: RM ${e.amount.toFixed(2)} (${e.source}, ${e.category_name})</div>
+  `).join('') || '<div class="list-item">No expenses today</div>';
+
+  const todayMoney = document.getElementById('todayMoney');
+  todayMoney.innerHTML = money.filter(m => isToday(m.date)).map(m => `
+    <div class="list-item">${m.description}: RM ${m.amount.toFixed(2)} (${m.location}, ${m.source})</div>
+  `).join('') || '<div class="list-item">No income today</div>';
+
+  const categoryList = document.getElementById('categoryList');
+  categoryList.innerHTML = categories.map(cat => {
+    const spent = expenses.filter(e => e.category_id === cat.id).reduce((sum, e) => sum + e.amount, 0);
+    if (cat.name === 'Others') {
+      return `
+        <div class="list-item category-item" onclick="showCategoryExpenses(${cat.id}, '${cat.name}')">
+          <div>${cat.name}: RM ${spent.toFixed(2)}</div>
+        </div>
+      `;
     }
+    const percent = cat.budget ? (spent / cat.budget) * 100 : 0;
+    return `
+      <div class="list-item category-item" onclick="showCategoryExpenses(${cat.id}, '${cat.name}')">
+        <div>${cat.name}: RM ${spent.toFixed(2)} / ${cat.budget.toFixed(2)}</div>
+        <div class="progress-bar"><div style="width: ${Math.min(percent, 100)}%; ${percent >= 100 ? 'background: var(--danger)' : percent >= 80 ? 'background: var(--warning)' : ''}"></div></div>
+      </div>
+    `;
+  }).join('') || '<div class="list-item">No categories</div>';
 
-    const categoryList = document.getElementById('categoryList');
-    categoryList.innerHTML = categories.map(cat => {
-        const spent = expenses.filter(e => e.category_id === cat.id).reduce((sum, e) => sum + e.amount, 0);
-        const percent = cat.budget ? (spent / cat.budget) * 100 : 0;
-        return `
-            <div class="category-card ${percent >= 100 ? 'over' : percent >= 80 ? 'nearing' : ''}">
-                <span>${cat.name}: RM ${spent.toFixed(2)} / RM ${cat.budget.toFixed(2)}</span>
-                ${cat.name !== 'Bills' ? `<button onclick="deleteCategory(${cat.id})">Delete</button>` : ''}
-            </div>
-        `;
-    }).join('');
+  const expenseCategorySelect = document.getElementById('expenseCategorySelect');
+  expenseCategorySelect.innerHTML = '<option value="">Select Category</option>' + 
+    categories.filter(cat => cat.name !== 'Bills' && cat.name !== 'Others').map(cat => `<option value="${cat.id}">${cat.name}</option>`).join('');
 
-    const categorySelect = document.getElementById('categorySelect');
-    categorySelect.innerHTML = '<option value="">Select Category</option>' + 
-        categories.map(cat => `<option value="${cat.id}">${cat.name}</option>`).join('');
+  const upcomingBills = document.getElementById('upcomingBills');
+  upcomingBills.innerHTML = bills.filter(b => !b.paid).map(b => `
+    <div class="list-item">
+      <span>${b.name}: RM ${b.amount.toFixed(2)} (Due: ${b.due_date})</span>
+      <div>
+        <button class="pay" onclick="markBillPaid(${b.id}, this)">Pay</button>
+        <button onclick="deleteBill(${b.id}, this)">Delete</button>
+      </div>
+    </div>
+  `).join('') || '<div class="list-item">No upcoming bills</div>';
 
-    const expenseHistory = document.getElementById('expenseHistory');
-    expenseHistory.innerHTML = expenses.map(exp => `
-        <div class="history-item">
-            <span>${exp.description}: RM ${exp.amount.toFixed(2)} (${exp.source}, ${exp.category_name || 'Uncategorized'})</span>
-            <div>
-                <button class="edit" onclick="editExpense(${exp.id})">Edit</button>
-                <button onclick="deleteExpense(${exp.id})">Delete</button>
-            </div>
+  const paidBills = document.getElementById('paidBills');
+  paidBills.innerHTML = bills.filter(b => b.paid).map(b => `
+    <div class="list-item">
+      <span>${b.name}: RM ${b.amount.toFixed(2)} (Paid: ${new Date(b.paid_date).toLocaleDateString()})</span>
+      <button onclick="reverseBillPayment(${b.id})">Reverse</button>
+    </div>
+  `).join('') || '<div class="list-item">No paid bills</div>';
+
+  const historyContent = document.getElementById('historyContent');
+  if (currentHistoryTab === 'expenses') {
+    historyContent.innerHTML = expenses.map(e => `
+      <div class="list-item">
+        <span>${e.description}: RM ${e.amount.toFixed(2)} (${e.source}, ${e.category_name}) - ${new Date(e.date).toLocaleString()}</span>
+        <div>
+          <button class="edit" onclick="editExpense(${e.id})">Edit</button>
+          <button onclick="deleteExpense(${e.id})">Delete</button>
         </div>
-    `).join('');
+      </div>
+    `).join('') || '<div class="list-item">No expenses</div>';
+  } else if (currentHistoryTab === 'money') {
+    historyContent.innerHTML = money.map(m => `
+      <div class="list-item">
+        <span>${m.description}: RM ${m.amount.toFixed(2)} (${m.location}, ${m.source}) - ${new Date(m.date).toLocaleString()}</span>
+        <button class="edit" onclick="editMoney(${m.id})">Edit</button>
+      </div>
+    `).join('') || '<div class="list-item">No income</div>';
+  } else if (currentHistoryTab === 'bills') {
+    historyContent.innerHTML = bills.map(b => `
+      <div class="list-item">
+        <span>${b.name}: RM ${b.amount.toFixed(2)} (Due: ${b.due_date}, ${b.paid ? `Paid: ${new Date(b.paid_date).toLocaleString()}` : 'Unpaid'})</span>
+        ${b.paid ? `<button onclick="reverseBillPayment(${b.id})">Reverse</button>` : ''}
+      </div>
+    `).join('') || '<div class="list-item">No bills</div>';
+  }
+}
 
-    const moneyHistory = document.getElementById('moneyHistory');
-    moneyHistory.innerHTML = money.map(m => `
-        <div class="history-item">
-            <span>RM ${m.amount.toFixed(2)} (${m.location})</span>
-            <button class="edit" onclick="editMoney(${m.id})">Edit</button>
-        </div>
-    `).join('');
+function showCategoryExpenses(categoryId, categoryName) {
+  const modal = document.getElementById('categoryModal');
+  const modalHeader = document.getElementById('modalHeader');
+  const categoryExpenses = document.getElementById('categoryExpenses');
 
-    const budgetHistory = document.getElementById('budgetHistory');
-    budgetHistory.innerHTML = categories.map(cat => {
-        const catExpenses = expenses.filter(e => e.category_id === cat.id);
-        return catExpenses.length ? `
-            <div class="history-item"><strong>${cat.name}</strong>:</div>
-            ${catExpenses.map(exp => `
-                <div class="history-item" style="padding-left: 20px;">
-                    ${exp.description}: RM ${exp.amount.toFixed(2)} (${exp.source})
-                </div>
-            `).join('')}
-        ` : '';
-    }).join('') || '<div class="history-item">No budget history yet</div>';
+  modalHeader.textContent = `${categoryName} Expenses`;
+  const filteredExpenses = expenses.filter(e => e.category_id === categoryId);
+  categoryExpenses.innerHTML = filteredExpenses.map(e => `
+    <div class="list-item">
+      <span>${e.description}: RM ${e.amount.toFixed(2)} (${e.source}) - ${new Date(e.date).toLocaleString()}</span>
+      <div>
+        <button class="edit" onclick="editExpense(${e.id})">Edit</button>
+        <button onclick="deleteExpense(${e.id})">Delete</button>
+      </div>
+    </div>
+  `).join('') || '<div class="list-item">No expenses in this category</div>';
 
-    const goalList = document.getElementById('goalList');
-    goalList.innerHTML = goals.map(goal => {
-        const progress = Math.min((totals.mytabung / goal.target_amount) * 100, 100);
-        return `
-            <div class="goal-card">
-                <div>
-                    <span>${goal.name}: RM ${totals.mytabung.toFixed(2)} / RM ${goal.target_amount.toFixed(2)}</span>
-                    <div class="progress-bar"><div class="progress" style="width: ${progress}%"></div></div>
-                    <small>Deadline: ${goal.deadline}</small>
-                </div>
-                <button onclick="deleteGoal(${goal.id})">Delete</button>
-            </div>
-        `;
-    }).join('');
+  modal.style.display = 'flex';
+}
 
-    const unpaidBillsList = document.getElementById('unpaidBillsList');
-    unpaidBillsList.innerHTML = bills.filter(b => !b.paid && isWithinFiveDays(b.due_date)).map(bill => `
-        <div class="bill-item">
-            <span>${bill.name}: RM ${bill.amount.toFixed(2)} (Due: ${bill.due_date})</span>
-            <div>
-                <button class="paid" id="paid-btn-${bill.id}" onclick="markBillPaid(${bill.id}, this)">Paid</button>
-                <button class="delete" id="delete-btn-${bill.id}" onclick="deleteBill(${bill.id}, this)">Delete</button>
-            </div>
-        </div>
-    `).join('') || '<div class="bill-item">No unpaid bills due within 5 days</div>';
-
-    const paidBillsList = document.getElementById('paidBillsList');
-    const currentMonth = new Date().toISOString().slice(0, 7); // e.g., "2025-03"
-    paidBillsList.innerHTML = bills.filter(b => b.paid && b.due_date.startsWith(currentMonth)).map(bill => `
-        <div class="bill-item">
-            <span>${bill.name}: RM ${bill.amount.toFixed(2)} (Due: ${bill.due_date})</span>
-            <span style="color: #33cc33;">Paid</span>
-        </div>
-    `).join('') || '<div class="bill-item">No bills paid this month</div>';
-
-    const billsHistory = document.getElementById('billsHistory');
-    billsHistory.innerHTML = bills.map(bill => `
-        <div class="history-item">
-            <span>${bill.name}: RM ${bill.amount.toFixed(2)} (Due: ${bill.due_date}, ${bill.paid ? 'Paid' : 'Unpaid'})</span>
-            <button onclick="editBill(${bill.id})">Edit</button>
-            ${bill.paid ? `<button onclick="reverseBillPayment(${bill.id})">Reverse to Unpaid</button>` : ''}
-        </div>
-    `).join('') || '<div class="history-item">No bills history yet</div>';
+function closeModal() {
+  const modal = document.getElementById('categoryModal');
+  modal.style.display = 'none';
 }
 
 async function addMoney() {
-    const amount = parseFloat(document.getElementById('moneyAmount').value);
-    const location = document.getElementById('moneyLocation').value;
-    const validLocations = ['Cash', 'Bank', 'MyTabung'];
-
-    if (!amount || isNaN(amount) || amount <= 0) {
-        return showError('Please enter a positive amount');
-    }
-    if (!validLocations.includes(location)) {
-        return showError('Please select a valid location (Cash, Bank, MyTabung)');
-    }
-
-    try {
-        const response = await fetch(editingMoneyId ? `/api/money/${editingMoneyId}` : '/api/money', {
-            method: editingMoneyId ? 'PUT' : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ amount, location })
-        });
-        const responseData = await response.json();
-        if (!response.ok) {
-            throw new Error(responseData.error || (editingMoneyId ? 'Failed to update money' : 'Failed to add money'));
-        }
-        resetForm('moneyForm');
-        await loadData();
-    } catch (error) {
-        console.error('Error adding/updating money:', error.message);
-        showError(error.message);
-    }
+  const amount = parseFloat(document.getElementById('moneyAmount').value);
+  const description = document.getElementById('moneyDescription').value;
+  const location = document.getElementById('moneyLocation').value;
+  const source = document.getElementById('moneyIncomeSource').value;
+  if (!amount || isNaN(amount) || amount <= 0 || !description || !['Cash', 'Bank', 'MyTabung'].includes(location) || !['Salary', 'Freelance', 'Donation', 'Others'].includes(source)) {
+    return showError('Invalid money input');
+  }
+  try {
+    const response = await fetch('/api/money', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, location, source, description })
+    });
+    if (!response.ok) throw new Error((await response.json()).error || 'Failed to add money');
+    document.getElementById('moneyAmount').value = '';
+    document.getElementById('moneyDescription').value = '';
+    document.getElementById('moneyLocation').value = 'Cash';
+    document.getElementById('moneyIncomeSource').value = 'Salary';
+    await loadData();
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function editMoney(id) {
-    const moneyEntry = money.find(m => m.id === id);
-    if (!moneyEntry) return;
-    editingMoneyId = id;
-    document.getElementById('moneyAmount').value = moneyEntry.amount;
-    document.getElementById('moneyLocation').value = moneyEntry.location;
-    document.getElementById('moneyFormTitle').textContent = 'Edit Money';
-    document.getElementById('moneyFormButton').textContent = 'Save Changes';
-    hideModal('moneyHistoryModal');
-    showModal('moneyForm');
+  const entry = money.find(m => m.id === id);
+  if (!entry) return;
+  const amount = parseFloat(prompt('New amount:', entry.amount));
+  const description = prompt('New description:', entry.description);
+  const location = prompt('New location (Cash, Bank, MyTabung):', entry.location);
+  const source = prompt('New source (Salary, Freelance, Donation, Others):', entry.source);
+  if (!amount || !description || !['Cash', 'Bank', 'MyTabung'].includes(location) || !['Salary', 'Freelance', 'Donation', 'Others'].includes(source)) {
+    return showError('Invalid input');
+  }
+  try {
+    await fetch(`/api/money/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, location, source, description })
+    });
+    await loadData();
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function addExpense() {
-    const amount = parseFloat(document.getElementById('expAmount').value);
-    const description = document.getElementById('description').value;
-    const source = document.getElementById('moneySource').value;
-    const category_id = document.getElementById('categorySelect').value || null;
-    const totals = calculateTotals();
+  const amount = parseFloat(document.getElementById('expAmount').value);
+  const description = document.getElementById('description').value;
+  const source = document.getElementById('moneySource').value;
+  const category_id = document.getElementById('expenseCategorySelect').value || null;
+  const totals = calculateTotals();
 
-    if (!amount || !description) return showError('Please fill all fields');
-    if (source === 'Cash' && amount > totals.cash) return showError('Not enough cash!');
-    if (source === 'Bank' && amount > totals.bank) return showError('Not enough money in bank!');
+  if (!amount || !description || !['Cash', 'Bank'].includes(source)) return showError('Invalid expense input');
+  if (source === 'Cash' && amount > totals.cash) return showError('Not enough cash');
+  if (source === 'Bank' && amount > totals.bank) return showError('Not enough in bank');
 
-    if (category_id) {
-        const category = categories.find(cat => cat.id === parseInt(category_id));
-        const currentSpent = expenses
-            .filter(e => e.category_id === category.id && (!editingExpenseId || e.id !== editingExpenseId))
-            .reduce((sum, e) => sum + e.amount, 0);
-        const newSpent = currentSpent + amount;
-        const percent = (newSpent / category.budget) * 100;
-        if (percent >= 100 && !confirm(`Warning: This expense will exceed your ${category.name} budget (RM ${newSpent.toFixed(2)} / RM ${category.budget.toFixed(2)}). Proceed?`)) {
-            return;
-        } else if (percent >= 80) {
-            alert(`Heads up: You're nearing your ${category.name} budget (RM ${newSpent.toFixed(2)} / RM ${category.budget.toFixed(2)}).`);
-        }
-    }
+  if (category_id) {
+    const cat = categories.find(c => c.id === parseInt(category_id));
+    const spent = expenses.filter(e => e.category_id === cat.id).reduce((sum, e) => sum + e.amount, 0);
+    const percent = ((spent + amount) / cat.budget) * 100;
+    if (percent >= 100 && !confirm(`Exceeds ${cat.name} budget (RM ${(spent + amount).toFixed(2)} / ${cat.budget.toFixed(2)}). Proceed?`)) return;
+  }
 
-    try {
-        const response = await fetch(editingExpenseId ? `/api/expenses/${editingExpenseId}` : '/api/expenses', {
-            method: editingExpenseId ? 'PUT' : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ amount, description, source, category_id })
-        });
-        if (!response.ok) throw new Error(await response.text());
-        resetForm('expenseForm');
-        await loadData();
-    } catch (error) {
-        console.error('Error adding/updating expense:', error);
-        showError(error.message);
-    }
+  try {
+    const response = await fetch('/api/expenses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, description, source, category_id })
+    });
+    if (!response.ok) throw new Error((await response.json()).error || 'Failed to add expense');
+    document.getElementById('expAmount').value = '';
+    document.getElementById('description').value = '';
+    document.getElementById('moneySource').value = 'Cash';
+    document.getElementById('expenseCategorySelect').value = '';
+    await loadData();
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function editExpense(id) {
-    const expense = expenses.find(e => e.id === id);
-    if (!expense) return;
-    editingExpenseId = id;
-    document.getElementById('expAmount').value = expense.amount;
-    document.getElementById('description').value = expense.description;
-    document.getElementById('moneySource').value = expense.source;
-    document.getElementById('categorySelect').value = expense.category_id || '';
-    document.getElementById('expenseFormTitle').textContent = 'Edit Expense';
-    document.getElementById('expenseFormButton').textContent = 'Save Changes';
-    hideModal('expenseHistoryModal');
-    showModal('expenseForm');
+  const exp = expenses.find(e => e.id === id);
+  if (!exp) return;
+  const amount = parseFloat(prompt('New amount:', exp.amount));
+  const description = prompt('New description:', exp.description);
+  const source = prompt('New source (Cash, Bank):', exp.source);
+  const category_id = prompt('New category ID (blank for none):', exp.category_id || '');
+  if (!amount || !description || !['Cash', 'Bank'].includes(source)) return showError('Invalid input');
+  try {
+    await fetch(`/api/expenses/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, description, source, category_id: category_id || null })
+    });
+    await loadData();
+    closeModal(); // Close the modal after editing
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function deleteExpense(id) {
-    try {
-        const response = await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
-        if (!response.ok) throw new Error('Failed to delete expense');
-        await loadData();
-    } catch (error) {
-        console.error('Error deleting expense:', error);
-        showError('Failed to delete expense');
-    }
+  if (!confirm('Delete expense?')) return;
+  try {
+    await fetch(`/api/expenses/${id}`, { method: 'DELETE' });
+    await loadData();
+    closeModal(); // Close the modal after deleting
+  } catch (error) {
+    showError('Failed to delete');
+  }
 }
 
 async function addCategory() {
-    const name = document.getElementById('categoryName').value;
-    const budget = parseFloat(document.getElementById('categoryAmount').value);
-    if (!name || !budget) return showError('Please fill all fields');
-    if (name === 'Bills') return showError('Cannot add a category named "Bills" - it is reserved.');
-    try {
-        const response = await fetch('/api/categories', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, budget })
-        });
-        if (!response.ok) throw new Error(await response.text());
-        resetForm('categoryForm');
-        await loadData();
-    } catch (error) {
-        console.error('Error adding category:', error);
-        showError('Failed to add category');
-    }
-}
-
-async function deleteCategory(id) {
-    const category = categories.find(cat => cat.id === id);
-    if (category.name === 'Bills') return showError('Cannot delete the "Bills" category.');
-    if (expenses.some(exp => exp.category_id === id)) return showError('Cannot delete category with existing expenses');
-    try {
-        const response = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
-        if (!response.ok) throw new Error(await response.text());
-        await loadData();
-    } catch (error) {
-        console.error('Error deleting category:', error);
-        showError('Failed to delete category');
-    }
-}
-
-async function addGoal() {
-    const name = document.getElementById('goalName').value;
-    const target_amount = parseFloat(document.getElementById('goalAmount').value);
-    const deadline = document.getElementById('goalDeadline').value;
-    if (!name || !target_amount || !deadline) return showError('Please fill all fields');
-    try {
-        const response = await fetch('/api/goals', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, target_amount, deadline })
-        });
-        if (!response.ok) throw new Error(await response.text());
-        resetForm('goalForm');
-        await loadData();
-    } catch (error) {
-        console.error('Error adding goal:', error);
-        showError('Failed to add goal');
-    }
-}
-
-async function deleteGoal(id) {
-    try {
-        const response = await fetch(`/api/goals/${id}`, { method: 'DELETE' });
-        if (!response.ok) throw new Error(await response.text());
-        await loadData();
-    } catch (error) {
-        console.error('Error deleting goal:', error);
-        showError('Failed to delete goal');
-    }
+  const name = document.getElementById('categoryName').value;
+  const budget = parseFloat(document.getElementById('categoryAmount').value);
+  if (!name || !budget || name === 'Bills' || name === 'Others') return showError('Invalid category input');
+  try {
+    await fetch('/api/categories', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, budget })
+    });
+    document.getElementById('categoryName').value = '';
+    document.getElementById('categoryAmount').value = '';
+    await loadData();
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function saveBill() {
-    const name = document.getElementById('billName').value;
-    const amount = parseFloat(document.getElementById('billAmount').value);
-    const due_date = document.getElementById('billDueDate').value;
-    const is_fixed = parseInt(document.getElementById('billType').value);
-    if (!name || (is_fixed && !amount) || !due_date) return showError('Please fill all fields (amount optional for dynamic bills)');
-
-    const bill = editingBillId ? bills.find(b => b.id === editingBillId) : null;
-    const billData = { name, amount: amount || 0, due_date, is_fixed, paid: bill ? bill.paid : 0 };
-
-    try {
-        const response = await fetch(editingBillId ? `/api/bills/${editingBillId}` : '/api/bills', {
-            method: editingBillId ? 'PUT' : 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(billData)
-        });
-        if (!response.ok) throw new Error(await response.text());
-        resetForm('billForm');
-        await loadData();
-    } catch (error) {
-        console.error('Error saving bill:', error);
-        showError(error.message);
-    }
-}
-
-function editBill(id) {
-    const bill = bills.find(b => b.id === id);
-    if (!bill) return;
-    editingBillId = id;
-    document.getElementById('billName').value = bill.name;
-    document.getElementById('billAmount').value = bill.amount;
-    document.getElementById('billDueDate').value = bill.due_date;
-    document.getElementById('billType').value = bill.is_fixed ? '1' : '0';
-    document.getElementById('billFormTitle').textContent = 'Edit Bill';
-    document.getElementById('billFormButton').textContent = 'Save Changes';
-    hideModal('billsHistoryModal');
-    showModal('billForm');
+  const name = document.getElementById('billName').value;
+  const amount = parseFloat(document.getElementById('billAmount').value);
+  const due_date = document.getElementById('billDueDate').value;
+  const is_fixed = parseInt(document.getElementById('billType').value);
+  if (!name || (is_fixed && !amount) || !due_date) return showError('Invalid bill input');
+  try {
+    await fetch('/api/bills', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, amount: amount || 0, is_fixed, due_date })
+    });
+    document.getElementById('billName').value = '';
+    document.getElementById('billAmount').value = '';
+    document.getElementById('billDueDate').value = '';
+    await loadData();
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 async function markBillPaid(id, button) {
-    const bill = bills.find(b => b.id === id);
-    if (!bill) return showError('Bill not found');
-    if (bill.paid) return showError('Bill is already paid');
-
-    button.disabled = true;
-    button.textContent = 'Processing...';
-
-    const totals = calculateTotals();
-    const source = totals.cash >= bill.amount ? 'Cash' : 'Bank';
-    if (source === 'Cash' && bill.amount > totals.cash) {
-        button.disabled = false;
-        button.textContent = 'Paid';
-        return showError('Not enough cash to pay this bill!');
+  const bill = bills.find(b => b.id === id);
+  if (!bill || bill.paid) return;
+  button.disabled = true;
+  const totals = calculateTotals();
+  const source = totals.cash >= bill.amount ? 'Cash' : 'Bank';
+  if (source === 'Cash' && bill.amount > totals.cash || source === 'Bank' && bill.amount > totals.bank) {
+    button.disabled = false;
+    return showError(`Not enough in ${source.toLowerCase()}`);
+  }
+  try {
+    await fetch(`/api/bills/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...bill, paid: 1 })
+    });
+    const billsCat = categories.find(c => c.name === 'Bills');
+    if (billsCat) {
+      await fetch('/api/expenses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount: bill.amount, description: `Paid: ${bill.name}`, source, category_id: billsCat.id })
+      });
     }
-    if (source === 'Bank' && bill.amount > totals.bank) {
-        button.disabled = false;
-        button.textContent = 'Paid';
-        return showError('Not enough money in bank to pay this bill!');
-    }
-
-    try {
-        const response = await fetch(`/api/bills/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                name: bill.name,
-                amount: bill.amount,
-                is_fixed: bill.is_fixed,
-                due_date: bill.due_date,
-                paid: 1
-            })
-        });
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to mark bill as paid: ${errorText}`);
-        }
-        const result = await response.json();
-        if (!result.success) throw new Error('Server did not confirm success');
-
-        const billsCategory = categories.find(cat => cat.name === 'Bills');
-        if (billsCategory) {
-            const expenseResponse = await fetch('/api/expenses', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    amount: bill.amount,
-                    description: `Paid: ${bill.name}`,
-                    source,
-                    category_id: billsCategory.id
-                })
-            });
-            if (!expenseResponse.ok) throw new Error(await expenseResponse.text());
-        }
-        await loadData();
-    } catch (error) {
-        console.error('Error marking bill as paid:', error.message);
-        showError(`Failed to mark bill as paid: ${error.message}`);
-        button.disabled = false;
-        button.textContent = 'Paid';
-    }
+    await loadData();
+  } catch (error) {
+    button.disabled = false;
+    showError(error.message);
+  }
 }
 
 async function deleteBill(id, button) {
-    if (!confirm('Are you sure you want to delete this bill? This will also remove any associated expense if paid.')) return;
-
-    button.disabled = true;
-    button.textContent = 'Deleting...';
-
-    const bill = bills.find(b => b.id === id);
-    if (!bill) {
-        button.disabled = false;
-        button.textContent = 'Delete';
-        return showError('Bill not found');
-    }
-
-    try {
-        const billResponse = await fetch(`/api/bills/${id}`, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' }
-        });
-        if (!billResponse.ok) throw new Error(await billResponse.text());
-
-        if (bill.paid) {
-            const expense = expenses.find(e => e.description === `Paid: ${bill.name}`);
-            if (expense) {
-                const expenseResponse = await fetch(`/api/expenses/${expense.id}`, {
-                    method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                if (!expenseResponse.ok) throw new Error(await expenseResponse.text());
-            }
-        }
-        await loadData();
-    } catch (error) {
-        console.error('Error deleting bill:', error.message);
-        showError(`Failed to delete bill: ${error.message}`);
-        button.disabled = false;
-        button.textContent = 'Delete';
-    }
+  if (!confirm('Delete bill?')) return;
+  button.disabled = true;
+  try {
+    await fetch(`/api/bills/${id}`, { method: 'DELETE' });
+    await loadData();
+  } catch (error) {
+    button.disabled = false;
+    showError('Failed to delete');
+  }
 }
 
 async function reverseBillPayment(id) {
-    const bill = bills.find(b => b.id === id);
-    if (!bill || !bill.paid) return;
-    try {
-        await fetch(`/api/bills/${id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...bill, paid: 0 })
-        });
-        const expense = expenses.find(e => e.description === `Paid: ${bill.name}`);
-        if (expense) await fetch(`/api/expenses/${expense.id}`, { method: 'DELETE' });
-        await loadData();
-    } catch (error) {
-        console.error('Error reversing bill payment:', error);
-        showError('Failed to reverse bill payment');
-    }
+  const bill = bills.find(b => b.id === id);
+  if (!bill || !bill.paid) return;
+  try {
+    await fetch(`/api/bills/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...bill, paid: 0, paid_date: null })
+    });
+    const exp = expenses.find(e => e.description === `Paid: ${bill.name}`);
+    if (exp) await fetch(`/api/expenses/${exp.id}`, { method: 'DELETE' });
+    await loadData();
+  } catch (error) {
+    showError('Failed to reverse');
+  }
 }
 
 async function resetBudget() {
-    if (!confirm('Are you sure you want to reset the budget? This will archive expenses, adjust budgets, and reset bills.')) return;
-    try {
-        const response = await fetch('/api/reset', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
-        });
-        if (!response.ok) throw new Error(await response.text());
-        await loadData();
-        alert('Budget reset successfully!');
-    } catch (error) {
-        console.error('Error resetting budget:', error);
-        showError('Failed to reset budget');
-    }
+  if (!confirm('Reset budget?')) return;
+  try {
+    await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    await loadData();
+    alert('Budget reset');
+  } catch (error) {
+    showError('Failed to reset');
+  }
 }
 
-function showTab(tabName) {
-    document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-    document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
-    document.getElementById(tabName).classList.add('active');
-    document.querySelector(`button[onclick="showTab('${tabName}')"]`).classList.add('active');
-    currentTab = tabName;
-    updateDisplay();
+function showScreen(screenId) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(screenId).classList.add('active');
+  document.querySelector(`button[onclick="showScreen('${screenId}')"]`).classList.add('active');
+  updateDisplay();
 }
 
-function showModal(modalId) {
-    updateDisplay();
-    document.getElementById(modalId).style.display = 'flex';
+function switchHistoryTab(tab) {
+  currentHistoryTab = tab;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector(`button[onclick="switchHistoryTab('${tab}')"]`).classList.add('active');
+  updateDisplay();
 }
 
-function hideModal(modalId) {
-    document.getElementById(modalId).style.display = 'none';
-    resetForm(modalId);
-}
-
-function resetForm(modalId) {
-    if (modalId === 'expenseForm') {
-        editingExpenseId = null;
-        document.getElementById('expAmount').value = '';
-        document.getElementById('description').value = '';
-        document.getElementById('moneySource').value = 'Cash';
-        document.getElementById('categorySelect').value = '';
-        document.getElementById('expenseFormTitle').textContent = 'Add Expense';
-        document.getElementById('expenseFormButton').textContent = 'Add Expense';
-    } else if (modalId === 'moneyForm') {
-        editingMoneyId = null;
-        document.getElementById('moneyAmount').value = '';
-        document.getElementById('moneyLocation').value = 'Cash';
-        document.getElementById('moneyFormTitle').textContent = 'Add Money';
-        document.getElementById('moneyFormButton').textContent = 'Add Money';
-    } else if (modalId === 'billForm') {
-        editingBillId = null;
-        document.getElementById('billName').value = '';
-        document.getElementById('billAmount').value = '';
-        document.getElementById('billDueDate').value = '';
-        document.getElementById('billType').value = '1';
-        document.getElementById('billFormTitle').textContent = 'Add Bill';
-        document.getElementById('billFormButton').textContent = 'Add Bill';
-    } else if (modalId === 'categoryForm') {
-        document.getElementById('categoryName').value = '';
-        document.getElementById('categoryAmount').value = '';
-    } else if (modalId === 'goalForm') {
-        document.getElementById('goalName').value = '';
-        document.getElementById('goalAmount').value = '';
-        document.getElementById('goalDeadline').value = '';
-    }
+function toggleSection(header) {
+  header.parentElement.classList.toggle('active');
 }
 
 function showError(message) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-message';
-    errorDiv.style.cssText = 'position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: #ff4444; color: white; padding: 10px 20px; border-radius: 5px; z-index: 2000;';
-    errorDiv.textContent = message;
-    document.body.appendChild(errorDiv);
-    setTimeout(() => errorDiv.remove(), 3000);
+  const div = document.createElement('div');
+  div.style.cssText = 'position: fixed; top: 16px; left: 50%; transform: translateX(-50%); background: var(--danger); color: white; padding: 8px 16px; border-radius: 4px; z-index: 1000; font-size: 14px;';
+  div.textContent = message;
+  document.body.appendChild(div);
+  setTimeout(() => div.remove(), 3000);
 }
 
-document.querySelectorAll('.modal').forEach(modal => {
-    modal.addEventListener('click', e => e.target === modal && hideModal(modal.id));
-});
-
 loadData();
-setInterval(loadData, 60000); // Refresh every minute

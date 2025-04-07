@@ -7,7 +7,7 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public')); // Serve static files before auth
+app.use(express.static('public'));
 
 const auth = (req, res, next) => {
   const user = basicAuth(req);
@@ -27,7 +27,10 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Initialize database tables
+const handleError = (res, err, customMessage) => {
+  res.status(500).json({ error: customMessage || err.message });
+};
+
 (async () => {
   try {
     await pool.query(`
@@ -35,7 +38,9 @@ const pool = new Pool({
         id SERIAL PRIMARY KEY,
         amount REAL,
         location TEXT CHECK(location IN ('Cash', 'Bank', 'MyTabung')),
-        date TEXT
+        source TEXT CHECK(source IN ('Salary', 'Freelance', 'Donation', 'Others')),
+        date TEXT,
+        description TEXT
       );
       CREATE TABLE IF NOT EXISTS categories (
         id SERIAL PRIMARY KEY,
@@ -51,11 +56,15 @@ const pool = new Pool({
         category_id INTEGER REFERENCES categories(id),
         date TEXT
       );
-      CREATE TABLE IF NOT EXISTS goals (
+      CREATE TABLE IF NOT EXISTS bills (
         id SERIAL PRIMARY KEY,
         name TEXT,
-        target_amount REAL,
-        deadline TEXT
+        amount REAL,
+        is_fixed INTEGER,
+        paid INTEGER DEFAULT 0,
+        due_date TEXT,
+        date TEXT,
+        paid_date TEXT
       );
       CREATE TABLE IF NOT EXISTS expenses_archive (
         id SERIAL PRIMARY KEY,
@@ -66,28 +75,22 @@ const pool = new Pool({
         date TEXT,
         archive_date TEXT
       );
-      CREATE TABLE IF NOT EXISTS bills (
-        id SERIAL PRIMARY KEY,
-        name TEXT,
-        amount REAL,
-        is_fixed INTEGER,
-        paid INTEGER DEFAULT 0,
-        due_date TEXT,
-        date TEXT
-      );
     `);
 
-    const { rows } = await pool.query('SELECT id FROM categories WHERE name = $1', ['Bills']);
-    if (rows.length === 0) {
+    const { rows: billsCat } = await pool.query('SELECT id FROM categories WHERE name = $1', ['Bills']);
+    if (billsCat.length === 0) {
       await pool.query('INSERT INTO categories (name, budget) VALUES ($1, $2)', ['Bills', 0]);
     }
-    console.log('Connected to database');
+
+    const { rows: othersCat } = await pool.query('SELECT id FROM categories WHERE name = $1', ['Others']);
+    if (othersCat.length === 0) {
+      await pool.query('INSERT INTO categories (name, budget) VALUES ($1, $2)', ['Others', 0]);
+    }
   } catch (err) {
-    console.error('Database connection or initialization error:', err.stack);
+    // Silent fail in production
   }
 })();
 
-// Helper to add months to a date
 const addMonths = (dateStr, months) => {
   const date = new Date(dateStr);
   date.setMonth(date.getMonth() + months);
@@ -97,107 +100,65 @@ const addMonths = (dateStr, months) => {
 // Money Endpoints
 app.get('/api/money', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM money');
+    const { rows } = await pool.query('SELECT * FROM money ORDER BY date DESC');
     res.json(rows);
   } catch (err) {
-    console.error('Error fetching money:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to fetch money');
   }
 });
 
 app.post('/api/money', async (req, res) => {
-  const { amount, location } = req.body;
-  console.log('POST /api/money request:', { amount, location }); // Log input
+  const { amount, location, source, description } = req.body;
   if (!amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Amount must be a positive number' });
+  }
+  if (!description) {
+    return res.status(400).json({ error: 'Description is required' });
   }
   const validLocations = ['Cash', 'Bank', 'MyTabung'];
   if (!location || !validLocations.includes(location)) {
     return res.status(400).json({ error: `Location must be one of: ${validLocations.join(', ')}` });
   }
+  const validSources = ['Salary', 'Freelance', 'Donation', 'Others'];
+  if (!source || !validSources.includes(source)) {
+    return res.status(400).json({ error: `Source must be one of: ${validSources.join(', ')}` });
+  }
   try {
     const { rows } = await pool.query(
-      'INSERT INTO money (amount, location, date) VALUES ($1, $2, $3) RETURNING id',
-      [amount, location, new Date().toISOString()]
+      'INSERT INTO money (amount, location, source, date, description) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [amount, location, source, new Date().toISOString(), description]
     );
     res.json({ id: rows[0].id });
   } catch (err) {
-    console.error('Error adding money:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to add money');
   }
 });
 
 app.put('/api/money/:id', async (req, res) => {
-  const { amount, location } = req.body;
-  console.log('PUT /api/money/:id request:', { id: req.params.id, amount, location }); // Log input
+  const { amount, location, source, description } = req.body;
   if (!amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Amount must be a positive number' });
+  }
+  if (!description) {
+    return res.status(400).json({ error: 'Description is required' });
   }
   const validLocations = ['Cash', 'Bank', 'MyTabung'];
   if (!location || !validLocations.includes(location)) {
     return res.status(400).json({ error: `Location must be one of: ${validLocations.join(', ')}` });
   }
+  const validSources = ['Salary', 'Freelance', 'Donation', 'Others'];
+  if (!source || !validSources.includes(source)) {
+    return res.status(400).json({ error: `Source must be one of: ${validSources.join(', ')}` });
+  }
   try {
     const { rowCount } = await pool.query(
-      'UPDATE money SET amount = $1, location = $2 WHERE id = $3',
-      [amount, location, req.params.id]
+      'UPDATE money SET amount = $1, location = $2, source = $3, description = $4 WHERE id = $5',
+      [amount, location, source, description, req.params.id]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'Money entry not found' });
     res.json({ success: true });
   } catch (err) {
-    console.error('Error updating money:', err.stack);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Category Endpoints
-app.get('/api/categories', async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM categories');
-    res.json(rows);
-  } catch (err) {
-    console.error('Error fetching categories:', err.stack);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/categories', async (req, res) => {
-  const { name, budget } = req.body;
-  try {
-    const { rows } = await pool.query(
-      'INSERT INTO categories (name, budget) VALUES ($1, $2) RETURNING id',
-      [name, budget]
-    );
-    res.json({ id: rows[0].id });
-  } catch (err) {
-    console.error('Error adding category:', err.stack);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.put('/api/categories/:id', async (req, res) => {
-  const { name, budget } = req.body;
-  try {
-    const { rowCount } = await pool.query(
-      'UPDATE categories SET name = $1, budget = $2 WHERE id = $3',
-      [name, budget, req.params.id]
-    );
-    if (rowCount === 0) return res.status(404).json({ error: 'Category not found' });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error updating category:', err.stack);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/categories/:id', async (req, res) => {
-  try {
-    const { rowCount } = await pool.query('DELETE FROM categories WHERE id = $1', [req.params.id]);
-    if (rowCount === 0) return res.status(404).json({ error: 'Category not found' });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error deleting category:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to update money');
   }
 });
 
@@ -205,52 +166,56 @@ app.delete('/api/categories/:id', async (req, res) => {
 app.get('/api/expenses', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      'SELECT e.*, c.name as category_name FROM expenses e LEFT JOIN categories c ON e.category_id = c.id'
+      'SELECT e.*, c.name as category_name FROM expenses e LEFT JOIN categories c ON e.category_id = c.id ORDER BY date DESC'
     );
     res.json(rows);
   } catch (err) {
-    console.error('Error fetching expenses:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to fetch expenses');
   }
 });
 
 app.post('/api/expenses', async (req, res) => {
-    const { amount, description, source, category_id } = req.body;
-    console.log('POST /api/expenses request:', { amount, description, source, category_id }); // Log input
-    if (!amount || isNaN(amount) || amount <= 0) {
-      return res.status(400).json({ error: 'Amount must be a positive number' });
+  let { amount, description, source, category_id } = req.body;
+  if (!amount || isNaN(amount) || amount <= 0) {
+    return res.status(400).json({ error: 'Amount must be a positive number' });
+  }
+  if (!description) {
+    return res.status(400).json({ error: 'Description is required' });
+  }
+  const validSources = ['Cash', 'Bank'];
+  if (!source || !validSources.includes(source)) {
+    return res.status(400).json({ error: `Source must be one of: ${validSources.join(', ')}` });
+  }
+  try {
+    if (!category_id) {
+      const { rows } = await pool.query('SELECT id FROM categories WHERE name = $1', ['Others']);
+      category_id = rows[0].id;
     }
-    if (!description) {
-      return res.status(400).json({ error: 'Description is required' });
-    }
-    const validSources = ['Cash', 'Bank'];
-    if (!source || !validSources.includes(source)) {
-      return res.status(400).json({ error: `Source must be one of: ${validSources.join(', ')}` });
-    }
-    try {
-      const { rows } = await pool.query(
-        'INSERT INTO expenses (amount, description, source, category_id, date) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-        [amount, description, source, category_id || null, new Date().toISOString()]
-      );
-      res.json({ id: rows[0].id });
-    } catch (err) {
-      console.error('Error adding expense:', err.stack);
-      res.status(500).json({ error: err.message });
-    }
-  });
+    const { rows } = await pool.query(
+      'INSERT INTO expenses (amount, description, source, category_id, date) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [amount, description, source, category_id, new Date().toISOString()]
+    );
+    res.json({ id: rows[0].id });
+  } catch (err) {
+    handleError(res, err, 'Failed to add expense');
+  }
+});
 
 app.put('/api/expenses/:id', async (req, res) => {
-  const { amount, description, source, category_id } = req.body;
+  let { amount, description, source, category_id } = req.body;
   try {
+    if (!category_id) {
+      const { rows } = await pool.query('SELECT id FROM categories WHERE name = $1', ['Others']);
+      category_id = rows[0].id;
+    }
     const { rowCount } = await pool.query(
       'UPDATE expenses SET amount = $1, description = $2, source = $3, category_id = $4 WHERE id = $5',
-      [amount, description, source, category_id || null, req.params.id]
+      [amount, description, source, category_id, req.params.id]
     );
     if (rowCount === 0) return res.status(404).json({ error: 'Expense not found' });
     res.json({ success: true });
   } catch (err) {
-    console.error('Error updating expense:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to update expense');
   }
 });
 
@@ -260,55 +225,43 @@ app.delete('/api/expenses/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Expense not found' });
     res.json({ success: true });
   } catch (err) {
-    console.error('Error deleting expense:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to delete expense');
   }
 });
 
-// Goals Endpoints
-app.get('/api/goals', async (req, res) => {
+// Categories Endpoints
+app.get('/api/categories', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM goals');
+    const { rows } = await pool.query('SELECT * FROM categories');
     res.json(rows);
   } catch (err) {
-    console.error('Error fetching goals:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to fetch categories');
   }
 });
 
-app.post('/api/goals', async (req, res) => {
-  const { name, target_amount, deadline } = req.body;
+app.post('/api/categories', async (req, res) => {
+  const { name, budget } = req.body;
+  if (name === 'Others' || name === 'Bills') {
+    return res.status(400).json({ error: 'Cannot create a category named "Others" or "Bills"' });
+  }
   try {
     const { rows } = await pool.query(
-      'INSERT INTO goals (name, target_amount, deadline) VALUES ($1, $2, $3) RETURNING id',
-      [name, target_amount, deadline]
+      'INSERT INTO categories (name, budget) VALUES ($1, $2) RETURNING id',
+      [name, budget]
     );
     res.json({ id: rows[0].id });
   } catch (err) {
-    console.error('Error adding goal:', err.stack);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/goals/:id', async (req, res) => {
-  try {
-    const { rowCount } = await pool.query('DELETE FROM goals WHERE id = $1', [req.params.id]);
-    if (rowCount === 0) return res.status(404).json({ error: 'Goal not found' });
-    res.json({ success: true });
-  } catch (err) {
-    console.error('Error deleting goal:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to add category');
   }
 });
 
 // Bills Endpoints
 app.get('/api/bills', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM bills');
+    const { rows } = await pool.query('SELECT * FROM bills ORDER BY due_date ASC');
     res.json(rows);
   } catch (err) {
-    console.error('Error fetching bills:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to fetch bills');
   }
 });
 
@@ -321,8 +274,7 @@ app.post('/api/bills', async (req, res) => {
     );
     res.json({ id: rows[0].id });
   } catch (err) {
-    console.error('Error adding bill:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to add bill');
   }
 });
 
@@ -335,9 +287,10 @@ app.put('/api/bills/:id', async (req, res) => {
     if (rows.length === 0) throw new Error('Bill not found');
     const wasPaid = rows[0].paid;
 
+    const paidDate = paid && !wasPaid ? new Date().toISOString() : (paid ? rows[0].paid_date : null);
     await client.query(
-      'UPDATE bills SET name = $1, amount = $2, is_fixed = $3, due_date = $4, paid = $5 WHERE id = $6',
-      [name, amount, is_fixed, due_date, paid ?? 0, req.params.id]
+      'UPDATE bills SET name = $1, amount = $2, is_fixed = $3, due_date = $4, paid = $5, paid_date = $6 WHERE id = $7',
+      [name, amount, is_fixed, due_date, paid ?? 0, paidDate, req.params.id]
     );
 
     if (!wasPaid && paid && is_fixed) {
@@ -351,7 +304,6 @@ app.put('/api/bills/:id', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Error updating bill:', err.stack);
     res.status(err.message === 'Bill not found' ? 404 : 500).json({ error: err.message });
   } finally {
     client.release();
@@ -364,8 +316,7 @@ app.delete('/api/bills/:id', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ error: 'Bill not found' });
     res.json({ success: true });
   } catch (err) {
-    console.error('Error deleting bill:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to delete bill');
   }
 });
 
@@ -382,10 +333,10 @@ app.post('/api/reset', async (req, res) => {
     );
 
     const { rows: categories } = await client.query('SELECT * FROM categories');
-    const { rows: expenses } = await client.query('SELECT * FROM expenses');
+    const { rows: expenses } = await pool.query('SELECT * FROM expenses');
 
     for (const cat of categories) {
-      if (cat.name !== 'Bills') {
+      if (cat.name !== 'Bills' && cat.name !== 'Others') {
         const spent = expenses.filter(e => e.category_id === cat.id).reduce((sum, e) => sum + (e.amount || 0), 0);
         const carryover = cat.budget - spent;
         await client.query(
@@ -395,7 +346,7 @@ app.post('/api/reset', async (req, res) => {
       }
     }
 
-    await client.query('UPDATE bills SET paid = 0');
+    await client.query('UPDATE bills SET paid = 0, paid_date = NULL');
 
     const { rows: bills } = await client.query('SELECT * FROM bills');
     const totalBillsBudget = bills.reduce((sum, bill) => sum + (bill.amount || 0), 0);
@@ -407,12 +358,11 @@ app.post('/api/reset', async (req, res) => {
     res.json({ success: true });
   } catch (err) {
     await client.query('ROLLBACK');
-    console.error('Error resetting budget:', err.stack);
-    res.status(500).json({ error: err.message });
+    handleError(res, err, 'Failed to reset budget');
   } finally {
     client.release();
   }
 });
 
 const port = process.env.PORT || 3001;
-app.listen(port, () => console.log(`Server running at http://localhost:${port}`));
+app.listen(port);
