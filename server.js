@@ -7,6 +7,8 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Serve static files without authentication
 app.use(express.static('public'));
 
 const auth = (req, res, next) => {
@@ -20,7 +22,8 @@ const auth = (req, res, next) => {
   next();
 };
 
-app.use(auth);
+// Apply authentication only to API routes
+app.use('/api', auth);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -77,6 +80,19 @@ const handleError = (res, err, customMessage) => {
       );
     `);
 
+    await pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_name = 'money' AND column_name = 'description'
+        ) THEN
+          ALTER TABLE money ADD COLUMN description TEXT;
+        END IF;
+      END $$;
+    `);
+
     const { rows: billsCat } = await pool.query('SELECT id FROM categories WHERE name = $1', ['Bills']);
     if (billsCat.length === 0) {
       await pool.query('INSERT INTO categories (name, budget) VALUES ($1, $2)', ['Bills', 0]);
@@ -87,7 +103,7 @@ const handleError = (res, err, customMessage) => {
       await pool.query('INSERT INTO categories (name, budget) VALUES ($1, $2)', ['Others', 0]);
     }
   } catch (err) {
-    // Silent fail in production
+    console.error('Startup error:', err);
   }
 })();
 
@@ -97,7 +113,7 @@ const addMonths = (dateStr, months) => {
   return date.toISOString().split('T')[0];
 };
 
-// Money Endpoints
+// API routes (already protected by auth middleware via app.use('/api', auth))
 app.get('/api/money', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM money ORDER BY date DESC');
@@ -109,6 +125,7 @@ app.get('/api/money', async (req, res) => {
 
 app.post('/api/money', async (req, res) => {
   const { amount, location, source, description } = req.body;
+  console.log('Received data:', { amount, location, source, description });
   if (!amount || isNaN(amount) || amount <= 0) {
     return res.status(400).json({ error: 'Amount must be a positive number' });
   }
@@ -126,14 +143,21 @@ app.post('/api/money', async (req, res) => {
   try {
     const { rows } = await pool.query(
       'INSERT INTO money (amount, location, source, date, description) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [amount, location, source, new Date().toISOString(), description]
+      [amount, location, source, description]
     );
     res.json({ id: rows[0].id });
   } catch (err) {
+    console.error('Database error:', err);
     handleError(res, err, 'Failed to add money');
   }
 });
 
+// Add auth middleware explicitly to the root route (index.html)
+app.get('/', auth, (req, res) => {
+  res.sendFile('index.html', { root: 'public' });
+});
+
+// Rest of the API routes (already protected by app.use('/api', auth))...
 app.put('/api/money/:id', async (req, res) => {
   const { amount, location, source, description } = req.body;
   if (!amount || isNaN(amount) || amount <= 0) {
@@ -162,7 +186,6 @@ app.put('/api/money/:id', async (req, res) => {
   }
 });
 
-// Expenses Endpoints
 app.get('/api/expenses', async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -229,7 +252,6 @@ app.delete('/api/expenses/:id', async (req, res) => {
   }
 });
 
-// Categories Endpoints
 app.get('/api/categories', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM categories');
@@ -255,7 +277,6 @@ app.post('/api/categories', async (req, res) => {
   }
 });
 
-// Bills Endpoints
 app.get('/api/bills', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM bills ORDER BY due_date ASC');
@@ -320,7 +341,6 @@ app.delete('/api/bills/:id', async (req, res) => {
   }
 });
 
-// Reset Endpoint
 app.post('/api/reset', async (req, res) => {
   const client = await pool.connect();
   try {
